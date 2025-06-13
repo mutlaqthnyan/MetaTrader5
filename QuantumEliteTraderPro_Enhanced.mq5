@@ -25,6 +25,8 @@
 #define MAX_QUANTUM_LEVELS 10
 #define SIGNAL_BUFFER_SIZE 1000
 #define DASHBOARD_UPDATE_MS 500
+#define MAX_CACHED_INDICATORS 50
+#define CACHE_EXPIRY_SECONDS 30
 
 enum ENUM_TRADING_MODE
 {
@@ -147,6 +149,17 @@ struct TradingSignal
    bool              isExecuted;
 };
 
+struct IndicatorCache
+{
+   string            symbol;
+   string            indicatorType;
+   int               period;
+   int               handle;
+   datetime          lastUpdate;
+   double            values[];
+   bool              isValid;
+};
+
 struct ActiveTrade
 {
    ulong             ticket;
@@ -185,6 +198,7 @@ CRiskManagementSystem     g_riskManager;
 SymbolData                g_symbols[];
 TradingSignal             g_signals[];
 ActiveTrade               g_activeTrades[];
+IndicatorCache            g_indicatorCache[];
 AIModelData               g_aiModel;
 
 bool                      g_isInitialized = false;
@@ -207,6 +221,7 @@ int OnInit()
    ArrayResize(g_symbols, 0);
    ArrayResize(g_signals, 0);
    ArrayResize(g_activeTrades, 0);
+   ArrayResize(g_indicatorCache, 0);
 
    if(!InitializeSubsystems())
    {
@@ -214,7 +229,7 @@ int OnInit()
       return INIT_FAILED;
    }
 
-   EventSetTimer(1);
+   EventSetTimer(5);
 
    if(InpEnableTelegram)
    {
@@ -718,11 +733,72 @@ void CalculateDynamicLevels(string symbol, TradingSignal &signal, MarketContext 
                    "، جلسة: " + DoubleToString(context.sessionMultiplier, 1) + ")";
 }
 
+int GetCachedIndicator(string symbol, string indicatorType, int period)
+{
+   for(int i = 0; i < ArraySize(g_indicatorCache); i++)
+   {
+      if(g_indicatorCache[i].symbol == symbol && 
+         g_indicatorCache[i].indicatorType == indicatorType && 
+         g_indicatorCache[i].period == period &&
+         g_indicatorCache[i].isValid &&
+         TimeCurrent() - g_indicatorCache[i].lastUpdate < CACHE_EXPIRY_SECONDS)
+      {
+         return g_indicatorCache[i].handle;
+      }
+   }
+   return INVALID_HANDLE;
+}
+
+void UpdateIndicatorCache(string symbol, string indicatorType, int period, int handle)
+{
+   int cacheIndex = -1;
+   for(int i = 0; i < ArraySize(g_indicatorCache); i++)
+   {
+      if(g_indicatorCache[i].symbol == symbol && 
+         g_indicatorCache[i].indicatorType == indicatorType && 
+         g_indicatorCache[i].period == period)
+      {
+         cacheIndex = i;
+         break;
+      }
+   }
+   
+   if(cacheIndex == -1)
+   {
+      cacheIndex = ArraySize(g_indicatorCache);
+      ArrayResize(g_indicatorCache, cacheIndex + 1);
+   }
+   
+   g_indicatorCache[cacheIndex].symbol = symbol;
+   g_indicatorCache[cacheIndex].indicatorType = indicatorType;
+   g_indicatorCache[cacheIndex].period = period;
+   g_indicatorCache[cacheIndex].handle = handle;
+   g_indicatorCache[cacheIndex].lastUpdate = TimeCurrent();
+   g_indicatorCache[cacheIndex].isValid = (handle != INVALID_HANDLE);
+}
+
 double AnalyzeTrendDirection(string symbol)
 {
-   int handleEMA20 = iMA(symbol, PERIOD_CURRENT, 20, 0, MODE_EMA, PRICE_CLOSE);
-   int handleEMA50 = iMA(symbol, PERIOD_CURRENT, 50, 0, MODE_EMA, PRICE_CLOSE);
-   int handleEMA200 = iMA(symbol, PERIOD_CURRENT, 200, 0, MODE_SMA, PRICE_CLOSE);
+   int handleEMA20 = GetCachedIndicator(symbol, "EMA", 20);
+   if(handleEMA20 == INVALID_HANDLE)
+   {
+      handleEMA20 = iMA(symbol, PERIOD_CURRENT, 20, 0, MODE_EMA, PRICE_CLOSE);
+      UpdateIndicatorCache(symbol, "EMA", 20, handleEMA20);
+   }
+   
+   int handleEMA50 = GetCachedIndicator(symbol, "EMA", 50);
+   if(handleEMA50 == INVALID_HANDLE)
+   {
+      handleEMA50 = iMA(symbol, PERIOD_CURRENT, 50, 0, MODE_EMA, PRICE_CLOSE);
+      UpdateIndicatorCache(symbol, "EMA", 50, handleEMA50);
+   }
+   
+   int handleEMA200 = GetCachedIndicator(symbol, "SMA", 200);
+   if(handleEMA200 == INVALID_HANDLE)
+   {
+      handleEMA200 = iMA(symbol, PERIOD_CURRENT, 200, 0, MODE_SMA, PRICE_CLOSE);
+      UpdateIndicatorCache(symbol, "SMA", 200, handleEMA200);
+   }
    
    if(handleEMA20 == INVALID_HANDLE || handleEMA50 == INVALID_HANDLE || handleEMA200 == INVALID_HANDLE)
    {
@@ -739,9 +815,6 @@ double AnalyzeTrendDirection(string symbol)
       CopyBuffer(handleEMA50, 0, 0, 5, ema50) <= 0 ||
       CopyBuffer(handleEMA200, 0, 0, 5, ema200) <= 0)
    {
-      IndicatorRelease(handleEMA20);
-      IndicatorRelease(handleEMA50);
-      IndicatorRelease(handleEMA200);
       return 50.0;
    }
    
@@ -772,10 +845,6 @@ double AnalyzeTrendDirection(string symbol)
    {
       score = 40.0;
    }
-   
-   IndicatorRelease(handleEMA20);
-   IndicatorRelease(handleEMA50);
-   IndicatorRelease(handleEMA200);
    
    return score;
 }
@@ -829,7 +898,12 @@ bool ValidateSignal(TradingSignal &signal)
 
 double CalculateATR(string symbol, int period)
 {
-   int handleATR = iATR(symbol, PERIOD_CURRENT, period);
+   int handleATR = GetCachedIndicator(symbol, "ATR", period);
+   if(handleATR == INVALID_HANDLE)
+   {
+      handleATR = iATR(symbol, PERIOD_CURRENT, period);
+      UpdateIndicatorCache(symbol, "ATR", period, handleATR);
+   }
    
    if(handleATR == INVALID_HANDLE)
    {
@@ -864,12 +938,10 @@ double CalculateATR(string symbol, int period)
    
    if(CopyBuffer(handleATR, 0, 0, 1, atrBuffer) <= 0)
    {
-      IndicatorRelease(handleATR);
       return 0.0;
    }
    
    double result = atrBuffer[0];
-   IndicatorRelease(handleATR);
    
    return result;
 }
