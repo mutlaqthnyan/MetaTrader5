@@ -205,6 +205,7 @@ SymbolData                g_symbols[];
 TradingSignal             g_signals[];
 double                    g_totalProfit = 0;
 double                    g_winRate = 0;
+int                       g_lastSignal = -1; // لتتبع آخر إشارة
 
 int OnInit()
 {
@@ -1408,6 +1409,16 @@ void OnTick()
 {
    if(!g_isInitialized) return;
    
+   static datetime lastSignalTime = 0;
+   datetime currentTime = TimeCurrent();
+   
+   // توليد إشارة كل 5 دقائق
+   if(currentTime - lastSignalTime >= 300)
+   {
+       GenerateSignal();
+       lastSignalTime = currentTime;
+   }
+   
    UpdateMarketData();
    ProcessTradingSignals();
    ManageActiveTrades();
@@ -1903,143 +1914,73 @@ bool PrepareNeuralInputs(string symbol, double inputs[])
     return true;
 }
 
-bool GenerateSignal(string symbol, TradingSignal &signal)
+void GenerateSignal()
 {
-   double score = g_marketEngine.AnalyzeSymbolComplete(symbol);
-   
-   if(InpEnableQuantumAnalysis)
-   {
-      score += g_marketEngine.GetQuantumAnalysisScore(symbol);
-   }
-   
-   // Neural Network Integration with High-Confidence Override
-   int direction = 0;
-   string signalStrength = "";
-   bool neuralNetworkUsed = false;
-   
-   if(InpEnableMLPrediction && g_neuralNetwork.m_isInitialized)
-   {
-      // Get neural network probabilities
-      double inputs[50];
-      if(PrepareNeuralInputs(symbol, inputs))
-      {
-          double nnOutputs[3];
-          g_neuralNetwork.ForwardDetailed(inputs, nnOutputs);
-          
-          // Use neural network probabilities if confidence is high
-          if(nnOutputs[0] > 0.7) // Strong Buy signal
-          {
-              direction = 1;
-              signalStrength = "شراء قوي (NN: " + DoubleToString(nnOutputs[0]*100, 1) + "%)";
-              score = nnOutputs[0] * 100;
-              neuralNetworkUsed = true;
-          }
-          else if(nnOutputs[1] > 0.7) // Strong Sell signal
-          {
-              direction = -1;
-              signalStrength = "بيع قوي (NN: " + DoubleToString(nnOutputs[1]*100, 1) + "%)";
-              score = nnOutputs[1] * 100;
-              neuralNetworkUsed = true;
-          }
-          else if(nnOutputs[0] > 0.6) // Moderate Buy
-          {
-              direction = 1;
-              signalStrength = "شراء متوسط (NN: " + DoubleToString(nnOutputs[0]*100, 1) + "%)";
-              score = nnOutputs[0] * 100;
-              neuralNetworkUsed = true;
-          }
-          else if(nnOutputs[1] > 0.6) // Moderate Sell
-          {
-              direction = -1;
-              signalStrength = "بيع متوسط (NN: " + DoubleToString(nnOutputs[1]*100, 1) + "%)";
-              score = nnOutputs[1] * 100;
-              neuralNetworkUsed = true;
-          }
-          else if(nnOutputs[2] > 0.8) // Strong Hold signal
-          {
-              // Neural network strongly suggests holding - no trade
-              return false;
-          }
-          else
-          {
-              // Neural network confidence is low, use traditional scoring
-              score += GetMLPrediction(symbol);
-          }
-      }
-      else
-      {
-          // Fallback to traditional ML prediction if PrepareNeuralInputs fails
-          score += GetMLPrediction(symbol);
-      }
-   }
-   else if(InpEnableMLPrediction)
-   {
-      // Neural network not initialized, use traditional ML
-      score += GetMLPrediction(symbol);
-   }
-   
-   // If neural network didn't provide a strong signal, use traditional scoring
-   if(!neuralNetworkUsed)
-   {
-       // Balanced 5-zone scoring system
-       if(score >= 70)
-       {
-          direction = 1;  // Strong/Weak Buy
-          signalStrength = (score >= 80) ? "شراء قوي" : "شراء ضعيف";
-       }
-       else if(score <= 30)
-       {
-          direction = -1; // Strong/Weak Sell  
-          signalStrength = (score <= 20) ? "بيع قوي" : "بيع ضعيف";
-       }
-       else if(score > 30 && score < 40)
-       {
-          direction = -1; // Weak Sell zone
-          signalStrength = "بيع ضعيف";
-       }
-       else if(score >= 60 && score < 70)
-       {
-          direction = 1;  // Weak Buy zone
-          signalStrength = "شراء ضعيف";
-       }
-       else
-       {
-          // Neutral zone (40-60) - no trading
-          return false;
-       }
-   }
-   
-   // Generate signal with balanced direction
-   signal.symbol = symbol;
-   signal.confidence = score;
-   signal.timestamp = TimeCurrent();
-   signal.entryPrice = SymbolInfoDouble(symbol, SYMBOL_BID);
-   signal.direction = direction;
-   
-   // Apply enhanced analysis and validation
-   double trendScore = AnalyzeTrendDirection(symbol);
-   double volatilityMultiplier = GetVolatilityMultiplier(symbol);
-   double sessionFactor = GetSessionVolatilityFactor();
-   
-   // Adjust confidence based on trend analysis
-   signal.confidence = (signal.confidence * 0.7) + (trendScore * 0.3);
-   
-   // Apply dynamic SL/TP levels using enhanced ATR
-   MarketContext context;
-   context.volatilityRatio = volatilityMultiplier;
-   context.sessionMultiplier = sessionFactor;
-   CalculateDynamicLevels(symbol, signal, context);
-   
-   // Validate signal before returning
-   if(!ValidateSignal(signal))
-   {
-      return false;
-   }
-   
-   signal.reason = "تحليل كمي متوازن - " + signalStrength;
-   signal.isExecuted = false;
-   
-   return true;
+    // التحقق من التهيئة
+    if(!g_neuralNetwork.m_isInitialized || !g_dataPreprocessor.IsInitialized())
+    {
+        Print("❌ النظام غير مهيأ بشكل كامل");
+        return;
+    }
+    
+    // 1️⃣ استخراج الميزات باستخدام DataPreprocessor
+    double features[50];
+    if(!g_dataPreprocessor.ExtractFeatures(features))
+    {
+        Print("❌ فشل استخراج الميزات");
+        return;
+    }
+    
+    // 2️⃣ تطبيع البيانات
+    g_dataPreprocessor.NormalizeData(features);
+    
+    // 3️⃣ الحصول على القرار من الشبكة العصبية
+    double outputs[3];
+    g_neuralNetwork.ForwardDetailed(features, outputs);
+    
+    // 4️⃣ تحليل النتائج واتخاذ القرار
+    int decision = 0; // 0=Buy, 1=Sell, 2=Hold
+    double maxProb = outputs[0];
+    
+    for(int i = 1; i < 3; i++)
+    {
+        if(outputs[i] > maxProb)
+        {
+            maxProb = outputs[i];
+            decision = i;
+        }
+    }
+    
+    // 5️⃣ طباعة القرار
+    string signalText;
+    switch(decision)
+    {
+        case 0: signalText = "🟢 BUY"; break;
+        case 1: signalText = "🔴 SELL"; break;
+        case 2: signalText = "⏸️ HOLD"; break;
+    }
+    
+    Print("🤖 إشارة الشبكة العصبية: ", signalText);
+    Print("   احتماليات: Buy=", DoubleToString(outputs[0]*100, 1), 
+          "% | Sell=", DoubleToString(outputs[1]*100, 1),
+          "% | Hold=", DoubleToString(outputs[2]*100, 1), "%");
+    
+    // 6️⃣ اختياري: تنفيذ الصفقة إذا كانت الثقة عالية
+    if(maxProb > 0.70) // ثقة أكثر من 70%
+    {
+        if(decision == 0 && g_lastSignal != 0)
+        {
+            // فتح صفقة شراء
+            g_lastSignal = 0;
+            // OpenBuyTrade(); // إذا كانت موجودة
+        }
+        else if(decision == 1 && g_lastSignal != 1)
+        {
+            // فتح صفقة بيع
+            g_lastSignal = 1;
+            // OpenSellTrade(); // إذا كانت موجودة
+        }
+    }
 }
 
 void CalculateDynamicLevels(string symbol, TradingSignal &signal, MarketContext &context)
