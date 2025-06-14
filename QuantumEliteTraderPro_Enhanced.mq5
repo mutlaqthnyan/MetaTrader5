@@ -200,13 +200,32 @@ private:
     
     // Training parameters
     double m_learningRate;
+    double m_initialLearningRate;
+    double m_learningRateDecay;
+    double m_momentum;
     bool m_isInitialized;
     double m_lastAccuracy;
+    int m_trainingEpoch;
     
     // Temporary arrays for forward/backward pass
     double m_hidden1[30];
     double m_hidden2[20];
     double m_output[3];
+    
+    // Intermediate calculations for detailed forward pass
+    double m_z1[30];  // Pre-activation layer 1
+    double m_a1[30];  // Post-activation layer 1
+    double m_z2[20];  // Pre-activation layer 2
+    double m_a2[20];  // Post-activation layer 2
+    double m_z3[3];   // Pre-activation output
+    
+    // Momentum arrays for weight updates
+    double m_momentum_weights1[50][30];
+    double m_momentum_weights2[30][20];
+    double m_momentum_weights3[20][3];
+    double m_momentum_biases1[30];
+    double m_momentum_biases2[20];
+    double m_momentum_biases3[3];
     
     // Activation functions
     double ReLU(double x) { return MathMax(0.0, x); }
@@ -257,8 +276,12 @@ public:
     CNeuralNetwork()
     {
         m_learningRate = 0.001;
+        m_initialLearningRate = 0.001;
+        m_learningRateDecay = 0.95;
+        m_momentum = 0.9;
         m_isInitialized = false;
         m_lastAccuracy = 0.0;
+        m_trainingEpoch = 0;
     }
     
     bool Initialize(double learningRate = 0.001)
@@ -302,6 +325,23 @@ public:
         ArrayInitialize(m_biases2, 0.0);
         ArrayInitialize(m_biases3, 0.0);
         
+        // Initialize momentum arrays to zero
+        for(int i = 0; i < 50; i++)
+            for(int j = 0; j < 30; j++)
+                m_momentum_weights1[i][j] = 0.0;
+                
+        for(int i = 0; i < 30; i++)
+            for(int j = 0; j < 20; j++)
+                m_momentum_weights2[i][j] = 0.0;
+                
+        for(int i = 0; i < 20; i++)
+            for(int j = 0; j < 3; j++)
+                m_momentum_weights3[i][j] = 0.0;
+                
+        ArrayInitialize(m_momentum_biases1, 0.0);
+        ArrayInitialize(m_momentum_biases2, 0.0);
+        ArrayInitialize(m_momentum_biases3, 0.0);
+        
         m_isInitialized = true;
         return true;
     }
@@ -331,41 +371,47 @@ public:
         ArrayCopy(normalizedInputs, inputs, 0, 0, 50);
         NormalizeInputs(normalizedInputs, 50);
         
-        // Forward pass: Input -> Hidden1
+        // Layer 1: Input -> Hidden1
+        // z1 = weights1 × inputs + biases1
         for(int j = 0; j < 30; j++)
         {
-            m_hidden1[j] = m_biases1[j];
+            m_z1[j] = m_biases1[j];
             for(int i = 0; i < 50; i++)
             {
-                m_hidden1[j] += normalizedInputs[i] * m_weights1[i][j];
+                m_z1[j] += normalizedInputs[i] * m_weights1[i][j];
             }
-            m_hidden1[j] = ReLU(m_hidden1[j]);
+            // a1 = ReLU(z1)
+            m_a1[j] = ReLU(m_z1[j]);
+            m_hidden1[j] = m_a1[j];
         }
         
-        // Forward pass: Hidden1 -> Hidden2
+        // Layer 2: Hidden1 -> Hidden2
+        // z2 = weights2 × a1 + biases2
         for(int j = 0; j < 20; j++)
         {
-            m_hidden2[j] = m_biases2[j];
+            m_z2[j] = m_biases2[j];
             for(int i = 0; i < 30; i++)
             {
-                m_hidden2[j] += m_hidden1[i] * m_weights2[i][j];
+                m_z2[j] += m_a1[i] * m_weights2[i][j];
             }
-            m_hidden2[j] = ReLU(m_hidden2[j]);
+            // a2 = ReLU(z2)
+            m_a2[j] = ReLU(m_z2[j]);
+            m_hidden2[j] = m_a2[j];
         }
         
-        // Forward pass: Hidden2 -> Output
-        double rawOutput[3];
+        // Layer 3: Hidden2 -> Output
+        // z3 = weights3 × a2 + biases3
         for(int j = 0; j < 3; j++)
         {
-            rawOutput[j] = m_biases3[j];
+            m_z3[j] = m_biases3[j];
             for(int i = 0; i < 20; i++)
             {
-                rawOutput[j] += m_hidden2[i] * m_weights3[i][j];
+                m_z3[j] += m_a2[i] * m_weights3[i][j];
             }
         }
         
-        // Apply Softmax
-        Softmax(rawOutput, outputs, 3);
+        // output = Softmax(z3)
+        Softmax(m_z3, outputs, 3);
         ArrayCopy(m_output, outputs, 0, 0, 3);
     }
     
@@ -373,14 +419,19 @@ public:
     {
         if(!m_isInitialized) return;
         
-        // Calculate output layer gradients
+        // Apply learning rate decay
+        double current_lr = learning_rate * MathPow(m_learningRateDecay, m_trainingEpoch / 100.0);
+        
+        // حساب الخطأ - Calculate Error
+        // Output layer gradients (dL/dz3)
         double outputGradients[3];
         for(int i = 0; i < 3; i++)
         {
             outputGradients[i] = m_output[i] - target[i];
         }
         
-        // Calculate hidden2 gradients
+        // تطبيق chain rule - Apply Chain Rule
+        // Hidden2 gradients (dL/dz2)
         double hidden2Gradients[20];
         for(int i = 0; i < 20; i++)
         {
@@ -389,10 +440,10 @@ public:
             {
                 hidden2Gradients[i] += outputGradients[j] * m_weights3[i][j];
             }
-            hidden2Gradients[i] *= ReLUDerivative(m_hidden2[i]);
+            hidden2Gradients[i] *= ReLUDerivative(m_z2[i]);
         }
         
-        // Calculate hidden1 gradients
+        // Hidden1 gradients (dL/dz1)
         double hidden1Gradients[30];
         for(int i = 0; i < 30; i++)
         {
@@ -401,47 +452,62 @@ public:
             {
                 hidden1Gradients[i] += hidden2Gradients[j] * m_weights2[i][j];
             }
-            hidden1Gradients[i] *= ReLUDerivative(m_hidden1[i]);
+            hidden1Gradients[i] *= ReLUDerivative(m_z1[i]);
         }
         
-        // Update weights3 and biases3
+        // تحديث الأوزان والانحيازات - Update Weights and Biases
+        // استخدم momentum = 0.9 - Use momentum = 0.9
+        
+        // Update weights3 and biases3 with momentum
         for(int i = 0; i < 20; i++)
         {
             for(int j = 0; j < 3; j++)
             {
-                m_weights3[i][j] -= learning_rate * outputGradients[j] * m_hidden2[i];
+                double gradient = outputGradients[j] * m_a2[i];
+                m_momentum_weights3[i][j] = m_momentum * m_momentum_weights3[i][j] + current_lr * gradient;
+                m_weights3[i][j] -= m_momentum_weights3[i][j];
             }
         }
         for(int i = 0; i < 3; i++)
         {
-            m_biases3[i] -= learning_rate * outputGradients[i];
+            m_momentum_biases3[i] = m_momentum * m_momentum_biases3[i] + current_lr * outputGradients[i];
+            m_biases3[i] -= m_momentum_biases3[i];
         }
         
-        // Update weights2 and biases2
+        // Update weights2 and biases2 with momentum
         for(int i = 0; i < 30; i++)
         {
             for(int j = 0; j < 20; j++)
             {
-                m_weights2[i][j] -= learning_rate * hidden2Gradients[j] * m_hidden1[i];
+                double gradient = hidden2Gradients[j] * m_a1[i];
+                m_momentum_weights2[i][j] = m_momentum * m_momentum_weights2[i][j] + current_lr * gradient;
+                m_weights2[i][j] -= m_momentum_weights2[i][j];
             }
         }
         for(int i = 0; i < 20; i++)
         {
-            m_biases2[i] -= learning_rate * hidden2Gradients[i];
+            m_momentum_biases2[i] = m_momentum * m_momentum_biases2[i] + current_lr * hidden2Gradients[i];
+            m_biases2[i] -= m_momentum_biases2[i];
         }
         
-        // Update weights1 and biases1
+        // Update weights1 and biases1 with momentum
         for(int i = 0; i < 50; i++)
         {
             for(int j = 0; j < 30; j++)
             {
-                m_weights1[i][j] -= learning_rate * hidden1Gradients[j] * m_hidden1[i];
+                double gradient = hidden1Gradients[j] * m_a1[i];
+                m_momentum_weights1[i][j] = m_momentum * m_momentum_weights1[i][j] + current_lr * gradient;
+                m_weights1[i][j] -= m_momentum_weights1[i][j];
             }
         }
         for(int i = 0; i < 30; i++)
         {
-            m_biases1[i] -= learning_rate * hidden1Gradients[i];
+            m_momentum_biases1[i] = m_momentum * m_momentum_biases1[i] + current_lr * hidden1Gradients[i];
+            m_biases1[i] -= m_momentum_biases1[i];
         }
+        
+        // Increment training epoch for learning rate decay
+        m_trainingEpoch++;
     }
     
     bool Train(double data[][], double labels[][], int samples, int epochs)
