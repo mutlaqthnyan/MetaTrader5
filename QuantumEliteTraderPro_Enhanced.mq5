@@ -184,6 +184,425 @@ struct AIModelData
    double            accuracy;
 };
 
+//+------------------------------------------------------------------+
+//| Neural Network Class - Real Implementation                       |
+//+------------------------------------------------------------------+
+class CNeuralNetwork
+{
+private:
+    // Network architecture: 50-30-20-3
+    double m_weights1[50][30];    // Input -> Hidden1
+    double m_weights2[30][20];    // Hidden1 -> Hidden2  
+    double m_weights3[20][3];     // Hidden2 -> Output
+    double m_biases1[30];         // Hidden1 biases
+    double m_biases2[20];         // Hidden2 biases
+    double m_biases3[3];          // Output biases
+    
+    // Training parameters
+    double m_learningRate;
+    bool m_isInitialized;
+    double m_lastAccuracy;
+    
+    // Temporary arrays for forward/backward pass
+    double m_hidden1[30];
+    double m_hidden2[20];
+    double m_output[3];
+    
+    // Activation functions
+    double ReLU(double x) { return MathMax(0.0, x); }
+    double ReLUDerivative(double x) { return (x > 0) ? 1.0 : 0.0; }
+    
+    void Softmax(double inputs[], double outputs[], int size)
+    {
+        double sum = 0;
+        double maxVal = inputs[0];
+        
+        // Find max for numerical stability
+        for(int i = 1; i < size; i++)
+            if(inputs[i] > maxVal) maxVal = inputs[i];
+        
+        // Calculate softmax
+        for(int i = 0; i < size; i++)
+        {
+            outputs[i] = MathExp(inputs[i] - maxVal);
+            sum += outputs[i];
+        }
+        
+        for(int i = 0; i < size; i++)
+            outputs[i] /= sum;
+    }
+    
+    void NormalizeInputs(double inputs[], int size)
+    {
+        double mean = 0, variance = 0;
+        
+        // Calculate mean
+        for(int i = 0; i < size; i++)
+            mean += inputs[i];
+        mean /= size;
+        
+        // Calculate variance
+        for(int i = 0; i < size; i++)
+            variance += MathPow(inputs[i] - mean, 2);
+        variance /= size;
+        
+        double stdDev = MathSqrt(variance + 1e-8); // Add small epsilon
+        
+        // Normalize
+        for(int i = 0; i < size; i++)
+            inputs[i] = (inputs[i] - mean) / stdDev;
+    }
+
+public:
+    CNeuralNetwork()
+    {
+        m_learningRate = 0.001;
+        m_isInitialized = false;
+        m_lastAccuracy = 0.0;
+    }
+    
+    bool Initialize(double learningRate = 0.001)
+    {
+        m_learningRate = learningRate;
+        
+        // Initialize weights with Xavier initialization
+        double limit1 = MathSqrt(6.0 / (50 + 30));
+        double limit2 = MathSqrt(6.0 / (30 + 20));
+        double limit3 = MathSqrt(6.0 / (20 + 3));
+        
+        // Initialize weights1 (50x30)
+        for(int i = 0; i < 50; i++)
+        {
+            for(int j = 0; j < 30; j++)
+            {
+                m_weights1[i][j] = (MathRand() / 16383.5 - 1.0) * limit1;
+            }
+        }
+        
+        // Initialize weights2 (30x20)
+        for(int i = 0; i < 30; i++)
+        {
+            for(int j = 0; j < 20; j++)
+            {
+                m_weights2[i][j] = (MathRand() / 16383.5 - 1.0) * limit2;
+            }
+        }
+        
+        // Initialize weights3 (20x3)
+        for(int i = 0; i < 20; i++)
+        {
+            for(int j = 0; j < 3; j++)
+            {
+                m_weights3[i][j] = (MathRand() / 16383.5 - 1.0) * limit3;
+            }
+        }
+        
+        // Initialize biases to zero
+        ArrayInitialize(m_biases1, 0.0);
+        ArrayInitialize(m_biases2, 0.0);
+        ArrayInitialize(m_biases3, 0.0);
+        
+        m_isInitialized = true;
+        return true;
+    }
+    
+    double Forward(double inputs[])
+    {
+        double outputs[3];
+        ForwardDetailed(inputs, outputs);
+        
+        // Return the index of highest probability as confidence score
+        int maxIndex = 0;
+        for(int i = 1; i < 3; i++)
+            if(outputs[i] > outputs[maxIndex]) maxIndex = i;
+        
+        // Convert to trading score: Buy=100, Hold=50, Sell=0
+        if(maxIndex == 0) return outputs[0] * 100;      // Buy probability
+        else if(maxIndex == 2) return outputs[2] * 100; // Sell probability  
+        else return 50.0;                               // Hold
+    }
+    
+    void ForwardDetailed(double inputs[], double outputs[])
+    {
+        if(!m_isInitialized) return;
+        
+        // Normalize inputs
+        double normalizedInputs[50];
+        ArrayCopy(normalizedInputs, inputs, 0, 0, 50);
+        NormalizeInputs(normalizedInputs, 50);
+        
+        // Forward pass: Input -> Hidden1
+        for(int j = 0; j < 30; j++)
+        {
+            m_hidden1[j] = m_biases1[j];
+            for(int i = 0; i < 50; i++)
+            {
+                m_hidden1[j] += normalizedInputs[i] * m_weights1[i][j];
+            }
+            m_hidden1[j] = ReLU(m_hidden1[j]);
+        }
+        
+        // Forward pass: Hidden1 -> Hidden2
+        for(int j = 0; j < 20; j++)
+        {
+            m_hidden2[j] = m_biases2[j];
+            for(int i = 0; i < 30; i++)
+            {
+                m_hidden2[j] += m_hidden1[i] * m_weights2[i][j];
+            }
+            m_hidden2[j] = ReLU(m_hidden2[j]);
+        }
+        
+        // Forward pass: Hidden2 -> Output
+        double rawOutput[3];
+        for(int j = 0; j < 3; j++)
+        {
+            rawOutput[j] = m_biases3[j];
+            for(int i = 0; i < 20; i++)
+            {
+                rawOutput[j] += m_hidden2[i] * m_weights3[i][j];
+            }
+        }
+        
+        // Apply Softmax
+        Softmax(rawOutput, outputs, 3);
+        ArrayCopy(m_output, outputs, 0, 0, 3);
+    }
+    
+    void Backward(double target[], double learning_rate)
+    {
+        if(!m_isInitialized) return;
+        
+        // Calculate output layer gradients
+        double outputGradients[3];
+        for(int i = 0; i < 3; i++)
+        {
+            outputGradients[i] = m_output[i] - target[i];
+        }
+        
+        // Calculate hidden2 gradients
+        double hidden2Gradients[20];
+        for(int i = 0; i < 20; i++)
+        {
+            hidden2Gradients[i] = 0;
+            for(int j = 0; j < 3; j++)
+            {
+                hidden2Gradients[i] += outputGradients[j] * m_weights3[i][j];
+            }
+            hidden2Gradients[i] *= ReLUDerivative(m_hidden2[i]);
+        }
+        
+        // Calculate hidden1 gradients
+        double hidden1Gradients[30];
+        for(int i = 0; i < 30; i++)
+        {
+            hidden1Gradients[i] = 0;
+            for(int j = 0; j < 20; j++)
+            {
+                hidden1Gradients[i] += hidden2Gradients[j] * m_weights2[i][j];
+            }
+            hidden1Gradients[i] *= ReLUDerivative(m_hidden1[i]);
+        }
+        
+        // Update weights3 and biases3
+        for(int i = 0; i < 20; i++)
+        {
+            for(int j = 0; j < 3; j++)
+            {
+                m_weights3[i][j] -= learning_rate * outputGradients[j] * m_hidden2[i];
+            }
+        }
+        for(int i = 0; i < 3; i++)
+        {
+            m_biases3[i] -= learning_rate * outputGradients[i];
+        }
+        
+        // Update weights2 and biases2
+        for(int i = 0; i < 30; i++)
+        {
+            for(int j = 0; j < 20; j++)
+            {
+                m_weights2[i][j] -= learning_rate * hidden2Gradients[j] * m_hidden1[i];
+            }
+        }
+        for(int i = 0; i < 20; i++)
+        {
+            m_biases2[i] -= learning_rate * hidden2Gradients[i];
+        }
+        
+        // Update weights1 and biases1
+        for(int i = 0; i < 50; i++)
+        {
+            for(int j = 0; j < 30; j++)
+            {
+                m_weights1[i][j] -= learning_rate * hidden1Gradients[j] * m_hidden1[i];
+            }
+        }
+        for(int i = 0; i < 30; i++)
+        {
+            m_biases1[i] -= learning_rate * hidden1Gradients[i];
+        }
+    }
+    
+    bool Train(double data[][], double labels[][], int samples, int epochs)
+    {
+        if(!m_isInitialized) return false;
+        
+        Print("بدء تدريب الشبكة العصبية - العينات: ", samples, " العصور: ", epochs);
+        
+        for(int epoch = 0; epoch < epochs; epoch++)
+        {
+            double totalLoss = 0;
+            int correct = 0;
+            
+            for(int sample = 0; sample < samples; sample++)
+            {
+                // Forward pass
+                double outputs[3];
+                ForwardDetailed(data[sample], outputs);
+                
+                // Calculate loss (cross-entropy)
+                for(int i = 0; i < 3; i++)
+                {
+                    if(labels[sample][i] > 0.5) // True label
+                        totalLoss -= MathLog(MathMax(outputs[i], 1e-15));
+                }
+                
+                // Check accuracy
+                int predictedClass = 0, trueClass = 0;
+                for(int i = 1; i < 3; i++)
+                {
+                    if(outputs[i] > outputs[predictedClass]) predictedClass = i;
+                    if(labels[sample][i] > labels[sample][trueClass]) trueClass = i;
+                }
+                if(predictedClass == trueClass) correct++;
+                
+                // Backward pass
+                Backward(labels[sample], m_learningRate);
+            }
+            
+            m_lastAccuracy = (double)correct / samples * 100.0;
+            
+            if(epoch % 10 == 0)
+            {
+                Print("العصر ", epoch, " - الخسارة: ", DoubleToString(totalLoss/samples, 4), 
+                      " الدقة: ", DoubleToString(m_lastAccuracy, 2), "%");
+            }
+        }
+        
+        Print("انتهى التدريب - الدقة النهائية: ", DoubleToString(m_lastAccuracy, 2), "%");
+        return true;
+    }
+    
+    bool SaveModel(string filename)
+    {
+        int handle = FileOpen(filename, FILE_WRITE|FILE_BIN);
+        if(handle == INVALID_HANDLE)
+        {
+            Print("خطأ في حفظ النموذج: ", filename);
+            return false;
+        }
+        
+        // Save network architecture info
+        FileWriteInteger(handle, 50); // Input size
+        FileWriteInteger(handle, 30); // Hidden1 size
+        FileWriteInteger(handle, 20); // Hidden2 size
+        FileWriteInteger(handle, 3);  // Output size
+        
+        // Save weights and biases
+        for(int i = 0; i < 50; i++)
+            for(int j = 0; j < 30; j++)
+                FileWriteDouble(handle, m_weights1[i][j]);
+                
+        for(int i = 0; i < 30; i++)
+            for(int j = 0; j < 20; j++)
+                FileWriteDouble(handle, m_weights2[i][j]);
+                
+        for(int i = 0; i < 20; i++)
+            for(int j = 0; j < 3; j++)
+                FileWriteDouble(handle, m_weights3[i][j]);
+        
+        for(int i = 0; i < 30; i++)
+            FileWriteDouble(handle, m_biases1[i]);
+        for(int i = 0; i < 20; i++)
+            FileWriteDouble(handle, m_biases2[i]);
+        for(int i = 0; i < 3; i++)
+            FileWriteDouble(handle, m_biases3[i]);
+        
+        FileWriteDouble(handle, m_learningRate);
+        FileWriteDouble(handle, m_lastAccuracy);
+        
+        FileClose(handle);
+        Print("تم حفظ النموذج: ", filename);
+        return true;
+    }
+    
+    bool LoadModel(string filename)
+    {
+        int handle = FileOpen(filename, FILE_READ|FILE_BIN);
+        if(handle == INVALID_HANDLE)
+        {
+            Print("خطأ في تحميل النموذج: ", filename);
+            return false;
+        }
+        
+        // Verify architecture
+        int inputSize = FileReadInteger(handle);
+        int hidden1Size = FileReadInteger(handle);
+        int hidden2Size = FileReadInteger(handle);
+        int outputSize = FileReadInteger(handle);
+        
+        if(inputSize != 50 || hidden1Size != 30 || hidden2Size != 20 || outputSize != 3)
+        {
+            Print("خطأ: بنية النموذج غير متطابقة");
+            FileClose(handle);
+            return false;
+        }
+        
+        // Load weights and biases
+        for(int i = 0; i < 50; i++)
+            for(int j = 0; j < 30; j++)
+                m_weights1[i][j] = FileReadDouble(handle);
+                
+        for(int i = 0; i < 30; i++)
+            for(int j = 0; j < 20; j++)
+                m_weights2[i][j] = FileReadDouble(handle);
+                
+        for(int i = 0; i < 20; i++)
+            for(int j = 0; j < 3; j++)
+                m_weights3[i][j] = FileReadDouble(handle);
+        
+        for(int i = 0; i < 30; i++)
+            m_biases1[i] = FileReadDouble(handle);
+        for(int i = 0; i < 20; i++)
+            m_biases2[i] = FileReadDouble(handle);
+        for(int i = 0; i < 3; i++)
+            m_biases3[i] = FileReadDouble(handle);
+        
+        m_learningRate = FileReadDouble(handle);
+        m_lastAccuracy = FileReadDouble(handle);
+        
+        FileClose(handle);
+        m_isInitialized = true;
+        Print("تم تحميل النموذج: ", filename, " - الدقة: ", DoubleToString(m_lastAccuracy, 2), "%");
+        return true;
+    }
+    
+    double GetAccuracy() { return m_lastAccuracy; }
+    string GetPredictionString(double outputs[])
+    {
+        if(outputs[0] > outputs[1] && outputs[0] > outputs[2])
+            return "شراء (" + DoubleToString(outputs[0]*100, 1) + "%)";
+        else if(outputs[1] > outputs[0] && outputs[1] > outputs[2])
+            return "بيع (" + DoubleToString(outputs[1]*100, 1) + "%)";
+        else
+            return "انتظار (" + DoubleToString(outputs[2]*100, 1) + "%)";
+    }
+};
+
+// Global neural network instance
+CNeuralNetwork g_neuralNetwork;
+
 // Neural network weights - using single array with manual indexing for MQL5 compatibility
 double g_neuralWeights[];
 
@@ -227,6 +646,27 @@ int OnInit()
    {
       Print("❌ فشلت تهيئة الأنظمة الفرعية!");
       return INIT_FAILED;
+   }
+
+   // Initialize Neural Network
+   if(InpEnableMLPrediction)
+   {
+      if(!g_neuralNetwork.Initialize(0.001))
+      {
+         Print("❌ خطأ في تهيئة الشبكة العصبية");
+         return INIT_FAILED;
+      }
+      
+      // Try to load existing model
+      if(!g_neuralNetwork.LoadModel("QuantumNN_Model.bin"))
+      {
+         Print("⚠️ لم يتم العثور على نموذج محفوظ - سيتم استخدام أوزان عشوائية");
+         Print("💡 يُنصح بتدريب النموذج لتحسين الأداء");
+      }
+      else
+      {
+         Print("✅ تم تحميل النموذج المحفوظ بنجاح");
+      }
    }
 
    EventSetTimer(5);
@@ -318,6 +758,25 @@ void OnTick()
 void OnTimer()
 {
    if(!g_isInitialized) return;
+   
+   static datetime lastTraining = 0;
+   static datetime lastCacheUpdate = 0;
+   
+   // Update indicator cache every 5 seconds
+   if(TimeCurrent() - lastCacheUpdate >= 5)
+   {
+      UpdateIndicatorCache();
+      lastCacheUpdate = TimeCurrent();
+   }
+   
+   // Train neural network once per day (24 hours = 86400 seconds)
+   if(InpEnableMLPrediction && g_neuralNetwork.m_isInitialized && 
+      TimeCurrent() - lastTraining >= 86400)
+   {
+      Print("بدء التدريب الدوري للشبكة العصبية...");
+      TrainNeuralNetwork();
+      lastTraining = TimeCurrent();
+   }
    
    if(InpEnableScanner && TimeCurrent() - g_lastScanTime > 30)
    {
@@ -587,6 +1046,200 @@ void AddSymbolToScan(string symbol, ENUM_MARKET_TYPE marketType)
    g_symbols[size].momentum = 0;
 }
 
+//+------------------------------------------------------------------+
+//| Prepare 50 Neural Network Input Features                         |
+//+------------------------------------------------------------------+
+bool PrepareNeuralInputs(string symbol, double inputs[])
+{
+    if(ArraySize(inputs) < 50) ArrayResize(inputs, 50);
+    ArrayInitialize(inputs, 0.0);
+    
+    // Get market data
+    double close[], high[], low[], open[], volume[];
+    ArraySetAsSeries(close, true);
+    ArraySetAsSeries(high, true);
+    ArraySetAsSeries(low, true);
+    ArraySetAsSeries(open, true);
+    ArraySetAsSeries(volume, true);
+    
+    if(CopyClose(symbol, PERIOD_CURRENT, 0, 20, close) <= 0 ||
+       CopyHigh(symbol, PERIOD_CURRENT, 0, 20, high) <= 0 ||
+       CopyLow(symbol, PERIOD_CURRENT, 0, 20, low) <= 0 ||
+       CopyOpen(symbol, PERIOD_CURRENT, 0, 20, open) <= 0 ||
+       CopyTickVolume(symbol, PERIOD_CURRENT, 0, 20, volume) <= 0)
+    {
+        Print("خطأ في جلب بيانات السوق للرمز: ", symbol);
+        return false;
+    }
+    
+    int idx = 0;
+    
+    // Group 1: Price Data (15 features)
+    // Features 0-4: Price changes for last 5 candles
+    for(int i = 0; i < 5 && i < ArraySize(close)-1; i++)
+    {
+        inputs[idx++] = (close[i] - close[i+1]) / close[i+1];
+    }
+    
+    // Features 5-9: Close/Open ratios for last 5 candles
+    for(int i = 0; i < 5 && i < ArraySize(close); i++)
+    {
+        inputs[idx++] = (close[i] - open[i]) / open[i];
+    }
+    
+    // Features 10-14: High/Low ratios for last 5 candles
+    for(int i = 0; i < 5 && i < ArraySize(high); i++)
+    {
+        inputs[idx++] = (high[i] - low[i]) / low[i];
+    }
+    
+    // Group 2: Technical Indicators (20 features)
+    // Features 15-17: Moving Averages
+    double ma20[], ma50[], ma200[];
+    ArraySetAsSeries(ma20, true);
+    ArraySetAsSeries(ma50, true);
+    ArraySetAsSeries(ma200, true);
+    
+    int ma20_handle = iMA(symbol, PERIOD_CURRENT, 20, 0, MODE_EMA, PRICE_CLOSE);
+    int ma50_handle = iMA(symbol, PERIOD_CURRENT, 50, 0, MODE_EMA, PRICE_CLOSE);
+    int ma200_handle = iMA(symbol, PERIOD_CURRENT, 200, 0, MODE_EMA, PRICE_CLOSE);
+    
+    if(ma20_handle != INVALID_HANDLE && CopyBuffer(ma20_handle, 0, 0, 3, ma20) > 0)
+        inputs[idx++] = (close[0] - ma20[0]) / close[0];
+    else inputs[idx++] = 0;
+    
+    if(ma50_handle != INVALID_HANDLE && CopyBuffer(ma50_handle, 0, 0, 3, ma50) > 0)
+        inputs[idx++] = (close[0] - ma50[0]) / close[0];
+    else inputs[idx++] = 0;
+    
+    if(ma200_handle != INVALID_HANDLE && CopyBuffer(ma200_handle, 0, 0, 3, ma200) > 0)
+        inputs[idx++] = (close[0] - ma200[0]) / close[0];
+    else inputs[idx++] = 0;
+    
+    // Features 18-20: RSI, MACD, Stochastic
+    double rsi[], macd_main[], macd_signal[], stoch_main[], stoch_signal[];
+    ArraySetAsSeries(rsi, true);
+    ArraySetAsSeries(macd_main, true);
+    ArraySetAsSeries(macd_signal, true);
+    ArraySetAsSeries(stoch_main, true);
+    ArraySetAsSeries(stoch_signal, true);
+    
+    
+    int rsi_handle = iRSI(symbol, PERIOD_CURRENT, 14, PRICE_CLOSE);
+    int macd_handle = iMACD(symbol, PERIOD_CURRENT, 12, 26, 9, PRICE_CLOSE);
+    int stoch_handle = iStochastic(symbol, PERIOD_CURRENT, 5, 3, 3, MODE_SMA, STO_LOWHIGH);
+    
+    if(rsi_handle != INVALID_HANDLE && CopyBuffer(rsi_handle, 0, 0, 1, rsi) > 0)
+        inputs[idx++] = (rsi[0] - 50.0) / 50.0; // Normalize RSI
+    else inputs[idx++] = 0;
+    
+    if(macd_handle != INVALID_HANDLE && 
+       CopyBuffer(macd_handle, 0, 0, 1, macd_main) > 0 &&
+       CopyBuffer(macd_handle, 1, 0, 1, macd_signal) > 0)
+        inputs[idx++] = (macd_main[0] - macd_signal[0]) / close[0];
+    else inputs[idx++] = 0;
+    
+    if(stoch_handle != INVALID_HANDLE && CopyBuffer(stoch_handle, 0, 0, 1, stoch_main) > 0)
+        inputs[idx++] = (stoch_main[0] - 50.0) / 50.0; // Normalize Stochastic
+    else inputs[idx++] = 0;
+    
+    // Features 21-23: Bollinger Bands
+    double bb_upper[], bb_middle[], bb_lower[];
+    ArraySetAsSeries(bb_upper, true);
+    ArraySetAsSeries(bb_middle, true);
+    ArraySetAsSeries(bb_lower, true);
+    
+    int bb_handle = iBands(symbol, PERIOD_CURRENT, 20, 0, 2.0, PRICE_CLOSE);
+    if(bb_handle != INVALID_HANDLE && 
+       CopyBuffer(bb_handle, 0, 0, 1, bb_middle) > 0 &&
+       CopyBuffer(bb_handle, 1, 0, 1, bb_upper) > 0 &&
+       CopyBuffer(bb_handle, 2, 0, 1, bb_lower) > 0)
+    {
+        inputs[idx++] = (close[0] - bb_upper[0]) / (bb_upper[0] - bb_lower[0]);
+        inputs[idx++] = (close[0] - bb_middle[0]) / bb_middle[0];
+        inputs[idx++] = (close[0] - bb_lower[0]) / (bb_upper[0] - bb_lower[0]);
+    }
+    else
+    {
+        inputs[idx++] = 0; inputs[idx++] = 0; inputs[idx++] = 0;
+    }
+    
+    // Features 24-26: ATR, ADX, CCI
+    double atr[], adx[], cci[];
+    ArraySetAsSeries(atr, true);
+    ArraySetAsSeries(adx, true);
+    ArraySetAsSeries(cci, true);
+    
+    int atr_handle = iATR(symbol, PERIOD_CURRENT, 14);
+    int adx_handle = iADX(symbol, PERIOD_CURRENT, 14);
+    int cci_handle = iCCI(symbol, PERIOD_CURRENT, 14, PRICE_TYPICAL);
+    
+    if(atr_handle != INVALID_HANDLE && CopyBuffer(atr_handle, 0, 0, 1, atr) > 0)
+        inputs[idx++] = atr[0] / close[0];
+    else inputs[idx++] = 0;
+    
+    if(adx_handle != INVALID_HANDLE && CopyBuffer(adx_handle, 0, 0, 1, adx) > 0)
+        inputs[idx++] = (adx[0] - 25.0) / 75.0; // Normalize ADX
+    else inputs[idx++] = 0;
+    
+    if(cci_handle != INVALID_HANDLE && CopyBuffer(cci_handle, 0, 0, 1, cci) > 0)
+        inputs[idx++] = MathMax(-1.0, MathMin(1.0, cci[0] / 200.0)); // Normalize CCI
+    else inputs[idx++] = 0;
+    
+    // Features 27-29: Williams %R, MFI, OBV (simplified)
+    inputs[idx++] = (close[0] - high[0]) / (high[0] - low[0]); // Williams %R approximation
+    inputs[idx++] = volume[0] > volume[1] ? 1.0 : -1.0; // MFI direction approximation
+    inputs[idx++] = (close[0] > close[1]) ? volume[0] : -volume[0]; // OBV approximation
+    
+    // Features 30-34: Additional technical features
+    for(int i = 30; i < 35; i++)
+        inputs[idx++] = 0; // Placeholder for future indicators
+    
+    // Group 3: Volume and Liquidity Data (10 features)
+    // Features 35-39: Volume for last 5 candles (normalized)
+    double avgVolume = 0;
+    for(int i = 0; i < 10 && i < ArraySize(volume); i++)
+        avgVolume += volume[i];
+    avgVolume /= 10;
+    
+    for(int i = 0; i < 5 && i < ArraySize(volume); i++)
+    {
+        inputs[idx++] = (volume[i] - avgVolume) / avgVolume;
+    }
+    
+    // Features 40-44: Volume-related features
+    inputs[idx++] = volume[0] / volume[1]; // Volume ratio
+    inputs[idx++] = (volume[0] - volume[1]) / volume[1]; // Volume change
+    inputs[idx++] = SymbolInfoDouble(symbol, SYMBOL_ASK) - SymbolInfoDouble(symbol, SYMBOL_BID); // Spread
+    inputs[idx++] = SymbolInfoDouble(symbol, SYMBOL_VOLUME) / 1000000.0; // Market depth approximation
+    inputs[idx++] = close[0]; // VWAP approximation (simplified)
+    
+    // Group 4: Time and Session Context (5 features)
+    // Features 45-49: Time-based features
+    MqlDateTime dt;
+    TimeToStruct(TimeCurrent(), dt);
+    
+    inputs[idx++] = dt.hour / 24.0; // Hour of day (0-1)
+    inputs[idx++] = dt.day_of_week / 7.0; // Day of week (0-1)
+    inputs[idx++] = GetSessionVolatilityFactor(); // Session factor
+    inputs[idx++] = GetVolatilityMultiplier(symbol); // Volatility multiplier
+    inputs[idx++] = AnalyzeTrendDirection(symbol) / 100.0; // Trend strength
+    
+    // Release indicator handles
+    if(ma20_handle != INVALID_HANDLE) IndicatorRelease(ma20_handle);
+    if(ma50_handle != INVALID_HANDLE) IndicatorRelease(ma50_handle);
+    if(ma200_handle != INVALID_HANDLE) IndicatorRelease(ma200_handle);
+    if(rsi_handle != INVALID_HANDLE) IndicatorRelease(rsi_handle);
+    if(macd_handle != INVALID_HANDLE) IndicatorRelease(macd_handle);
+    if(stoch_handle != INVALID_HANDLE) IndicatorRelease(stoch_handle);
+    if(bb_handle != INVALID_HANDLE) IndicatorRelease(bb_handle);
+    if(atr_handle != INVALID_HANDLE) IndicatorRelease(atr_handle);
+    if(adx_handle != INVALID_HANDLE) IndicatorRelease(adx_handle);
+    if(cci_handle != INVALID_HANDLE) IndicatorRelease(cci_handle);
+    
+    return true;
+}
+
 bool GenerateSignal(string symbol, TradingSignal &signal)
 {
    double score = g_marketEngine.AnalyzeSymbolComplete(symbol);
@@ -596,39 +1249,101 @@ bool GenerateSignal(string symbol, TradingSignal &signal)
       score += g_marketEngine.GetQuantumAnalysisScore(symbol);
    }
    
-   if(InpEnableMLPrediction)
+   // Neural Network Integration with High-Confidence Override
+   int direction = 0;
+   string signalStrength = "";
+   bool neuralNetworkUsed = false;
+   
+   if(InpEnableMLPrediction && g_neuralNetwork.m_isInitialized)
    {
+      // Get neural network probabilities
+      double inputs[50];
+      if(PrepareNeuralInputs(symbol, inputs))
+      {
+          double nnOutputs[3];
+          g_neuralNetwork.ForwardDetailed(inputs, nnOutputs);
+          
+          // Use neural network probabilities if confidence is high
+          if(nnOutputs[0] > 0.7) // Strong Buy signal
+          {
+              direction = 1;
+              signalStrength = "شراء قوي (NN: " + DoubleToString(nnOutputs[0]*100, 1) + "%)";
+              score = nnOutputs[0] * 100;
+              neuralNetworkUsed = true;
+          }
+          else if(nnOutputs[1] > 0.7) // Strong Sell signal
+          {
+              direction = -1;
+              signalStrength = "بيع قوي (NN: " + DoubleToString(nnOutputs[1]*100, 1) + "%)";
+              score = nnOutputs[1] * 100;
+              neuralNetworkUsed = true;
+          }
+          else if(nnOutputs[0] > 0.6) // Moderate Buy
+          {
+              direction = 1;
+              signalStrength = "شراء متوسط (NN: " + DoubleToString(nnOutputs[0]*100, 1) + "%)";
+              score = nnOutputs[0] * 100;
+              neuralNetworkUsed = true;
+          }
+          else if(nnOutputs[1] > 0.6) // Moderate Sell
+          {
+              direction = -1;
+              signalStrength = "بيع متوسط (NN: " + DoubleToString(nnOutputs[1]*100, 1) + "%)";
+              score = nnOutputs[1] * 100;
+              neuralNetworkUsed = true;
+          }
+          else if(nnOutputs[2] > 0.8) // Strong Hold signal
+          {
+              // Neural network strongly suggests holding - no trade
+              return false;
+          }
+          else
+          {
+              // Neural network confidence is low, use traditional scoring
+              score += GetMLPrediction(symbol);
+          }
+      }
+      else
+      {
+          // Fallback to traditional ML prediction if PrepareNeuralInputs fails
+          score += GetMLPrediction(symbol);
+      }
+   }
+   else if(InpEnableMLPrediction)
+   {
+      // Neural network not initialized, use traditional ML
       score += GetMLPrediction(symbol);
    }
    
-   // Balanced 5-zone scoring system
-   int direction = 0;
-   string signalStrength = "";
-   
-   if(score >= 70)
+   // If neural network didn't provide a strong signal, use traditional scoring
+   if(!neuralNetworkUsed)
    {
-      direction = 1;  // Strong/Weak Buy
-      signalStrength = (score >= 80) ? "شراء قوي" : "شراء ضعيف";
-   }
-   else if(score <= 30)
-   {
-      direction = -1; // Strong/Weak Sell  
-      signalStrength = (score <= 20) ? "بيع قوي" : "بيع ضعيف";
-   }
-   else if(score > 30 && score < 40)
-   {
-      direction = -1; // Weak Sell zone
-      signalStrength = "بيع ضعيف";
-   }
-   else if(score >= 60 && score < 70)
-   {
-      direction = 1;  // Weak Buy zone
-      signalStrength = "شراء ضعيف";
-   }
-   else
-   {
-      // Neutral zone (40-60) - no trading
-      return false;
+       // Balanced 5-zone scoring system
+       if(score >= 70)
+       {
+          direction = 1;  // Strong/Weak Buy
+          signalStrength = (score >= 80) ? "شراء قوي" : "شراء ضعيف";
+       }
+       else if(score <= 30)
+       {
+          direction = -1; // Strong/Weak Sell  
+          signalStrength = (score <= 20) ? "بيع قوي" : "بيع ضعيف";
+       }
+       else if(score > 30 && score < 40)
+       {
+          direction = -1; // Weak Sell zone
+          signalStrength = "بيع ضعيف";
+       }
+       else if(score >= 60 && score < 70)
+       {
+          direction = 1;  // Weak Buy zone
+          signalStrength = "شراء ضعيف";
+       }
+       else
+       {
+          // Neutral zone (40-60) - no trading
+          return false;
+       }
    }
    
    // Generate signal with balanced direction
@@ -981,28 +1696,43 @@ double GetSessionVolatilityFactor()
 
 double GetMLPrediction(string symbol)
 {
-   double inputs[20];
-   double close[];
-   long volume[];
-   
-   ArraySetAsSeries(close, true);
-   ArraySetAsSeries(volume, true);
-   
-   CopyClose(symbol, PERIOD_CURRENT, 0, 20, close);
-   CopyTickVolume(symbol, PERIOD_CURRENT, 0, 20, volume);
-   
-   for(int i = 0; i < 10; i++)
-   {
-      inputs[i] = (close[i] - close[i+1]) / close[i+1];
-      inputs[i+10] = (double)volume[i] / 10000.0;
-   }
-   
-   double prediction = ProcessNeuralNetwork(inputs);
-   
-   return prediction * 50;
+    double inputs[50];
+    if(!PrepareNeuralInputs(symbol, inputs))
+    {
+        Print("خطأ في تحضير مدخلات الشبكة العصبية للرمز: ", symbol);
+        return 50.0; // Neutral score
+    }
+    
+    if(!g_neuralNetwork.m_isInitialized)
+    {
+        Print("تحذير: الشبكة العصبية غير مهيأة، استخدام النموذج التقليدي");
+        return ProcessTraditionalML(inputs);
+    }
+    
+    double outputs[3];
+    g_neuralNetwork.ForwardDetailed(inputs, outputs);
+    
+    // Convert probabilities to trading score
+    // Buy probability contributes positively, Sell negatively
+    double score = (outputs[0] * 100) - (outputs[1] * 100) + 50;
+    
+    // Ensure score is within valid range
+    score = MathMax(0.0, MathMin(100.0, score));
+    
+    // Log prediction for debugging
+    static datetime lastLog = 0;
+    if(TimeCurrent() - lastLog > 300) // Log every 5 minutes
+    {
+        Print("تنبؤ الشبكة العصبية - ", symbol, ": ", 
+              g_neuralNetwork.GetPredictionString(outputs), 
+              " النتيجة: ", DoubleToString(score, 1));
+        lastLog = TimeCurrent();
+    }
+    
+    return score;
 }
 
-double ProcessNeuralNetwork(double &inputs[])
+double ProcessTraditionalML(double &inputs[])
 {
    double layerOutput = 0;
    
@@ -1018,7 +1748,7 @@ double ProcessNeuralNetwork(double &inputs[])
       layerOutput = 1.0 / (1.0 + MathExp(-layerOutput));
    }
    
-   return layerOutput;
+   return layerOutput * 50;
 }
 
 void UpdateDashboard()
@@ -1223,6 +1953,185 @@ void SendTradeExecutionNotification(TradingSignal &signal, ulong ticket)
    message += "🎯 حالة الصفقة: نشطة ومراقبة تلقائياً";
    
    SendTelegramMessage(message);
+}
+
+//+------------------------------------------------------------------+
+//| Train Neural Network with Historical Data                        |
+//+------------------------------------------------------------------+
+void TrainNeuralNetwork()
+{
+    Print("بدء تدريب الشبكة العصبية...");
+    
+    string symbols[] = {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD"};
+    int totalSamples = 0;
+    
+    // Prepare training data
+    double trainingData[1000][50];
+    double trainingLabels[1000][3];
+    
+    for(int s = 0; s < ArraySize(symbols); s++)
+    {
+        string symbol = symbols[s];
+        
+        // Get historical data for training
+        double close[], high[], low[];
+        ArraySetAsSeries(close, true);
+        ArraySetAsSeries(high, true);
+        ArraySetAsSeries(low, true);
+        
+        if(CopyClose(symbol, PERIOD_H1, 0, 500, close) <= 0) continue;
+        if(CopyHigh(symbol, PERIOD_H1, 0, 500, high) <= 0) continue;
+        if(CopyLow(symbol, PERIOD_H1, 0, 500, low) <= 0) continue;
+        
+        // Create training samples
+        for(int i = 50; i < ArraySize(close) - 10 && totalSamples < 1000; i++)
+        {
+            // Prepare inputs for this historical point
+            double inputs[50];
+            if(!PrepareNeuralInputsHistorical(symbol, inputs, i))
+                continue;
+            
+            // Copy inputs to training data
+            for(int j = 0; j < 50; j++)
+                trainingData[totalSamples][j] = inputs[j];
+            
+            // Create labels based on future price movement
+            double currentPrice = close[i];
+            double futurePrice = close[i-5]; // 5 periods ahead
+            double priceChange = (futurePrice - currentPrice) / currentPrice;
+            
+            // Initialize labels
+            trainingLabels[totalSamples][0] = 0; // Buy
+            trainingLabels[totalSamples][1] = 0; // Sell  
+            trainingLabels[totalSamples][2] = 0; // Hold
+            
+            // Set labels based on price movement
+            if(priceChange > 0.001) // 0.1% increase = Buy
+                trainingLabels[totalSamples][0] = 1.0;
+            else if(priceChange < -0.001) // 0.1% decrease = Sell
+                trainingLabels[totalSamples][1] = 1.0;
+            else // Small movement = Hold
+                trainingLabels[totalSamples][2] = 1.0;
+            
+            totalSamples++;
+        }
+    }
+    
+    if(totalSamples < 100)
+    {
+        Print("عدد عينات التدريب قليل جداً: ", totalSamples);
+        return;
+    }
+    
+    Print("عدد عينات التدريب: ", totalSamples);
+    
+    // Train the network
+    if(g_neuralNetwork.Train(trainingData, trainingLabels, totalSamples, 100))
+    {
+        // Save the trained model
+        g_neuralNetwork.SaveModel("QuantumNN_Model.bin");
+        Print("تم حفظ النموذج المدرب بنجاح");
+    }
+    else
+    {
+        Print("فشل في تدريب الشبكة العصبية");
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Prepare Neural Inputs for Historical Data                        |
+//+------------------------------------------------------------------+
+bool PrepareNeuralInputsHistorical(string symbol, double inputs[], int shift)
+{
+    if(ArraySize(inputs) < 50) ArrayResize(inputs, 50);
+    ArrayInitialize(inputs, 0.0);
+    
+    // Get historical market data with shift
+    double close[], high[], low[], open[], volume[];
+    ArraySetAsSeries(close, true);
+    ArraySetAsSeries(high, true);
+    ArraySetAsSeries(low, true);
+    ArraySetAsSeries(open, true);
+    ArraySetAsSeries(volume, true);
+    
+    if(CopyClose(symbol, PERIOD_H1, shift, 20, close) <= 0 ||
+       CopyHigh(symbol, PERIOD_H1, shift, 20, high) <= 0 ||
+       CopyLow(symbol, PERIOD_H1, shift, 20, low) <= 0 ||
+       CopyOpen(symbol, PERIOD_H1, shift, 20, open) <= 0 ||
+       CopyTickVolume(symbol, PERIOD_H1, shift, 20, volume) <= 0)
+    {
+        return false;
+    }
+    
+    int idx = 0;
+    
+    // Group 1: Price Data (15 features)
+    // Features 0-4: Price changes for last 5 candles
+    for(int i = 0; i < 5 && i < ArraySize(close)-1; i++)
+    {
+        inputs[idx++] = (close[i] - close[i+1]) / close[i+1];
+    }
+    
+    // Features 5-9: Close/Open ratios for last 5 candles
+    for(int i = 0; i < 5 && i < ArraySize(close); i++)
+    {
+        inputs[idx++] = (close[i] - open[i]) / open[i];
+    }
+    
+    // Features 10-14: High/Low ratios for last 5 candles
+    for(int i = 0; i < 5 && i < ArraySize(high); i++)
+    {
+        inputs[idx++] = (high[i] - low[i]) / low[i];
+    }
+    
+    // Group 2: Technical Indicators (20 features) - Simplified for historical data
+    // Features 15-17: Simple moving averages
+    double ma5 = 0, ma10 = 0, ma20 = 0;
+    for(int i = 0; i < 5 && i < ArraySize(close); i++) ma5 += close[i];
+    for(int i = 0; i < 10 && i < ArraySize(close); i++) ma10 += close[i];
+    for(int i = 0; i < 20 && i < ArraySize(close); i++) ma20 += close[i];
+    
+    ma5 /= 5; ma10 /= 10; ma20 /= 20;
+    
+    inputs[idx++] = (close[0] - ma5) / close[0];
+    inputs[idx++] = (close[0] - ma10) / close[0];
+    inputs[idx++] = (close[0] - ma20) / close[0];
+    
+    // Features 18-34: Simplified technical indicators
+    for(int i = 18; i < 35; i++)
+        inputs[idx++] = 0; // Placeholder for complex indicators
+    
+    // Group 3: Volume and Liquidity Data (10 features)
+    // Features 35-39: Volume for last 5 candles (normalized)
+    double avgVolume = 0;
+    for(int i = 0; i < 10 && i < ArraySize(volume); i++)
+        avgVolume += volume[i];
+    avgVolume /= 10;
+    
+    for(int i = 0; i < 5 && i < ArraySize(volume); i++)
+    {
+        inputs[idx++] = (volume[i] - avgVolume) / avgVolume;
+    }
+    
+    // Features 40-44: Volume-related features
+    inputs[idx++] = volume[0] / volume[1]; // Volume ratio
+    inputs[idx++] = (volume[0] - volume[1]) / volume[1]; // Volume change
+    inputs[idx++] = 0; // Spread (not available historically)
+    inputs[idx++] = 0; // Market depth (not available historically)
+    inputs[idx++] = close[0]; // VWAP approximation (simplified)
+    
+    // Group 4: Time and Session Context (5 features)
+    // Features 45-49: Time-based features (simplified for historical data)
+    MqlDateTime dt;
+    TimeToStruct(TimeCurrent() - shift * 3600, dt); // Approximate historical time
+    
+    inputs[idx++] = dt.hour / 24.0; // Hour of day (0-1)
+    inputs[idx++] = dt.day_of_week / 7.0; // Day of week (0-1)
+    inputs[idx++] = 1.0; // Session factor (default)
+    inputs[idx++] = 1.0; // Volatility multiplier (default)
+    inputs[idx++] = 0.5; // Trend strength (neutral)
+    
+    return true;
 }
 
 void OnDeinit(const int reason)
