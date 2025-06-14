@@ -6,7 +6,7 @@
 #property strict
 
 // Include the main file to access CDataPreprocessor class
-#include "attachments/101f5f8f-6b2b-42b6-acfb-92624b2e6dbf/QuantumEliteTraderPro_Enhanced.mq5"
+#include "DataPreprocessor.mqh"
 
 //+------------------------------------------------------------------+
 //| Test initialization function                                      |

@@ -17,6 +17,8 @@
 #include "Market_Analysis_Engine.mqh"
 #include "Pattern_Recognition_Engine.mqh"
 #include "Risk_Management_System.mqh"
+#include "NeuralNetwork.mqh"
+#include "DataPreprocessor.mqh"
 
 #define QUANTUM_VERSION "4.0.0"
 #define MAX_SYMBOLS 100
@@ -184,155 +186,48 @@ struct AIModelData
    double            accuracy;
 };
 
-//+------------------------------------------------------------------+
-//| Neural Network Class - Real Implementation                       |
-//+------------------------------------------------------------------+
-class CNeuralNetwork
-{
-private:
-    // Network architecture: 50-30-20-3
-    double m_weights1[50][30];    // Input -> Hidden1
-    double m_weights2[30][20];    // Hidden1 -> Hidden2  
-    double m_weights3[20][3];     // Hidden2 -> Output
-    double m_biases1[30];         // Hidden1 biases
-    double m_biases2[20];         // Hidden2 biases
-    double m_biases3[3];          // Output biases
-    
-    // Training parameters
-    double m_learningRate;
-    double m_initialLearningRate;
-    double m_learningRateDecay;
-    double m_momentum;
-    bool m_isInitialized;
-    double m_lastAccuracy;
-    int m_trainingEpoch;
-    
-    // Temporary arrays for forward/backward pass
-    double m_hidden1[30];
-    double m_hidden2[20];
-    double m_output[3];
-    
-    // Intermediate calculations for detailed forward pass
-    double m_z1[30];  // Pre-activation layer 1
-    double m_a1[30];  // Post-activation layer 1
-    double m_z2[20];  // Pre-activation layer 2
-    double m_a2[20];  // Post-activation layer 2
-    double m_z3[3];   // Pre-activation output
-    
-    // Momentum arrays for weight updates
-    double m_momentum_weights1[50][30];
-    double m_momentum_weights2[30][20];
-    double m_momentum_weights3[20][3];
-    double m_momentum_biases1[30];
-    double m_momentum_biases2[20];
-    double m_momentum_biases3[3];
-    
-    // Activation functions
-    double ReLU(double x) { return MathMax(0.0, x); }
-    double ReLUDerivative(double x) { return (x > 0) ? 1.0 : 0.0; }
-    
-    void Softmax(double inputs[], double outputs[], int size)
-    {
-        double sum = 0;
-        double maxVal = inputs[0];
-        
-        // Find max for numerical stability
-        for(int i = 1; i < size; i++)
-            if(inputs[i] > maxVal) maxVal = inputs[i];
-        
-        // Calculate softmax
-        for(int i = 0; i < size; i++)
-        {
-            outputs[i] = MathExp(inputs[i] - maxVal);
-            sum += outputs[i];
-        }
-        
-        for(int i = 0; i < size; i++)
-            outputs[i] /= sum;
-    }
-    
-    void NormalizeInputs(double inputs[], int size)
-    {
-        double mean = 0, variance = 0;
-        
-        // Calculate mean
-        for(int i = 0; i < size; i++)
-            mean += inputs[i];
-        mean /= size;
-        
-        // Calculate variance
-        for(int i = 0; i < size; i++)
-            variance += MathPow(inputs[i] - mean, 2);
-        variance /= size;
-        
-        double stdDev = MathSqrt(variance + 1e-8); // Add small epsilon
-        
-        // Normalize
-        for(int i = 0; i < size; i++)
-            inputs[i] = (inputs[i] - mean) / stdDev;
-    }
+// Global neural network instance
+CNeuralNetwork g_neuralNetwork;
 
-public:
-    CNeuralNetwork()
-    {
-        m_learningRate = 0.001;
-        m_initialLearningRate = 0.001;
-        m_learningRateDecay = 0.95;
-        m_momentum = 0.9;
-        m_isInitialized = false;
-        m_lastAccuracy = 0.0;
-        m_trainingEpoch = 0;
-    }
-    
-    bool Initialize(double learningRate = 0.001)
-    {
-        m_learningRate = learningRate;
-        
-        // Initialize weights with Xavier initialization
-        double limit1 = MathSqrt(6.0 / (50 + 30));
-        double limit2 = MathSqrt(6.0 / (30 + 20));
-        double limit3 = MathSqrt(6.0 / (20 + 3));
-        
-        // Initialize weights1 (50x30)
-        for(int i = 0; i < 50; i++)
-        {
-            for(int j = 0; j < 30; j++)
-            {
-                m_weights1[i][j] = (MathRand() / 16383.5 - 1.0) * limit1;
-            }
-        }
-        
-        // Initialize weights2 (30x20)
-        for(int i = 0; i < 30; i++)
-        {
-            for(int j = 0; j < 20; j++)
-            {
-                m_weights2[i][j] = (MathRand() / 16383.5 - 1.0) * limit2;
-            }
-        }
-        
-        // Initialize weights3 (20x3)
-        for(int i = 0; i < 20; i++)
-        {
-            for(int j = 0; j < 3; j++)
-            {
-                m_weights3[i][j] = (MathRand() / 16383.5 - 1.0) * limit3;
-            }
-        }
-        
-        // Initialize biases to zero
-        ArrayInitialize(m_biases1, 0.0);
-        ArrayInitialize(m_biases2, 0.0);
-        ArrayInitialize(m_biases3, 0.0);
-        
-        // Initialize momentum arrays to zero
-        for(int i = 0; i < 50; i++)
-            for(int j = 0; j < 30; j++)
-                m_momentum_weights1[i][j] = 0.0;
-                
-        for(int i = 0; i < 30; i++)
-            for(int j = 0; j < 20; j++)
-                m_momentum_weights2[i][j] = 0.0;
+// Global data preprocessor instance
+CDataPreprocessor g_dataPreprocessor;
+
+// Neural network weights - using single array with manual indexing for MQL5 compatibility
+double g_neuralWeights[];
+
+CTrade                    g_trade;
+CPositionInfo             g_position;
+CSymbolInfo               g_symbolInfo;
+CAccountInfo              g_account;
+CMarketAnalysisEngine     g_marketEngine;
+CPatternRecognitionEngine g_patternEngine;
+CRiskManagementSystem     g_riskManager;
+
+SymbolData                g_symbols[];
+TradingSignal             g_signals[];
+double                    g_totalProfit = 0;
+double                    g_winRate = 0;
+
+int OnInit()
+{
+   Print("═══════════════════════════════════════════════════════════════");
+   Print("🎯 QUANTUM ELITE TRADER PRO v", QUANTUM_VERSION, " - بدء التهيئة");
+   Print("═══════════════════════════════════════════════════════════════");
+
+   g_trade.SetExpertMagicNumber(GetMagicNumber());
+   g_trade.SetDeviationInPoints(10);
+   g_trade.SetTypeFilling(ORDER_FILLING_FOK);
+
+   if(!InitializeSubsystems())
+   {
+      Print("❌ فشل في تهيئة الأنظمة الفرعية");
+      return INIT_FAILED;
+   }
+
+   g_isInitialized = true;
+   Print("✅ تمت التهيئة بنجاح!");
+
+   return INIT_SUCCEEDED;
                 
         for(int i = 0; i < 20; i++)
             for(int j = 0; j < 3; j++)
@@ -822,17 +717,7 @@ public:
     }
 };
 
-//+------------------------------------------------------------------+
-//| CDataPreprocessor Class - معالج البيانات المتقدم                    |
-//+------------------------------------------------------------------+
-class CDataPreprocessor
-{
-private:
-    // إحصائيات التطبيع لكل مجموعة من الميزات
-    double m_priceMean[10], m_priceStd[10];           // Price features statistics
-    double m_techMean[20], m_techStd[20];             // Technical indicators statistics  
-    double m_microMean[10], m_microStd[10];           // Market microstructure statistics
-    double m_temporalMean[10], m_temporalStd[10];     // Temporal features statistics
+
     
     bool m_isInitialized;
     
@@ -1370,30 +1255,7 @@ private:
                 stds[feature] = 1.0;
         }
     }
-    
-    void Cleanup()
-    {
-        if(m_rsiHandle != INVALID_HANDLE) IndicatorRelease(m_rsiHandle);
-        if(m_macdHandle != INVALID_HANDLE) IndicatorRelease(m_macdHandle);
-        if(m_bbHandle != INVALID_HANDLE) IndicatorRelease(m_bbHandle);
-        if(m_ma5Handle != INVALID_HANDLE) IndicatorRelease(m_ma5Handle);
-        if(m_ma10Handle != INVALID_HANDLE) IndicatorRelease(m_ma10Handle);
-        if(m_ma20Handle != INVALID_HANDLE) IndicatorRelease(m_ma20Handle);
-        if(m_ma50Handle != INVALID_HANDLE) IndicatorRelease(m_ma50Handle);
-        if(m_stochHandle != INVALID_HANDLE) IndicatorRelease(m_stochHandle);
-        if(m_atrHandle != INVALID_HANDLE) IndicatorRelease(m_atrHandle);
-        if(m_cciHandle != INVALID_HANDLE) IndicatorRelease(m_cciHandle);
-    }
-};
 
-// Global neural network instance
-CNeuralNetwork g_neuralNetwork;
-
-// Global data preprocessor instance
-CDataPreprocessor g_dataPreprocessor;
-
-// Neural network weights - using single array with manual indexing for MQL5 compatibility
-double g_neuralWeights[];
 
 CTrade                    g_trade;
 CPositionInfo             g_position;
