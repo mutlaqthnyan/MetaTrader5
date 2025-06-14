@@ -510,54 +510,210 @@ public:
         m_trainingEpoch++;
     }
     
-    bool Train(double data[][], double labels[][], int samples, int epochs)
+    // Training statistics
+    double m_bestValAccuracy;
+    int m_epochsWithoutImprovement;
+    double m_trainingLoss;
+    double m_validationLoss;
+    
+    bool Train(double data[][], double labels[], int epochs)
     {
         if(!m_isInitialized) return false;
         
-        Print("بدء تدريب الشبكة العصبية - العينات: ", samples, " العصور: ", epochs);
+        int dataSize = ArrayRange(data, 0);
+        if(dataSize < 10) return false;
+        
+        // تقسيم البيانات: 80% training, 20% validation
+        int trainSize = (int)(dataSize * 0.8);
+        int valSize = dataSize - trainSize;
+        
+        if(trainSize < 5 || valSize < 2) return false;
+        
+        // إنشاء مصفوفات التدريب والتحقق
+        double trainData[][], trainLabels[], valData[][], valLabels[];
+        ArrayResize(trainData, trainSize);
+        ArrayResize(trainLabels, trainSize);
+        ArrayResize(valData, valSize);
+        ArrayResize(valLabels, valSize);
+        
+        for(int i = 0; i < trainSize; i++)
+        {
+            ArrayResize(trainData[i], 50);
+            for(int j = 0; j < 50; j++) trainData[i][j] = data[i][j];
+            trainLabels[i] = labels[i];
+        }
+        
+        for(int i = 0; i < valSize; i++)
+        {
+            ArrayResize(valData[i], 50);
+            for(int j = 0; j < 50; j++) valData[i][j] = data[trainSize + i][j];
+            valLabels[i] = labels[trainSize + i];
+        }
+        
+        return TrainWithValidation(trainData, trainLabels, valData, valLabels, epochs);
+    }
+    
+    bool TrainWithValidation(double trainData[][], double trainLabels[], double valData[][], double valLabels[], int epochs)
+    {
+        if(!m_isInitialized) return false;
+        
+        int trainSize = ArraySize(trainLabels);
+        int valSize = ArraySize(valLabels);
+        int batchSize = 32; // Batch size = 32 كما هو مطلوب
+        
+        m_bestValAccuracy = 0.0;
+        m_epochsWithoutImprovement = 0;
+        
+        Print("🚀 بدء التدريب المتقدم:");
+        Print("   📊 Training samples: ", trainSize);
+        Print("   📊 Validation samples: ", valSize);
+        Print("   📊 Batch size: ", batchSize);
+        Print("   🎯 Target accuracy: >65%");
         
         for(int epoch = 0; epoch < epochs; epoch++)
         {
-            double totalLoss = 0;
-            int correct = 0;
+            // تدريب بـ mini-batches
+            double epochTrainLoss = 0;
+            int numBatches = (trainSize + batchSize - 1) / batchSize; // Ceiling division
             
-            for(int sample = 0; sample < samples; sample++)
+            // خلط البيانات في كل epoch (محاكاة)
+            for(int shuffle = 0; shuffle < 3; shuffle++)
             {
-                // Forward pass
-                double outputs[3];
-                ForwardDetailed(data[sample], outputs);
+                int idx1 = (int)(MathRand() / 32767.0 * trainSize);
+                int idx2 = (int)(MathRand() / 32767.0 * trainSize);
                 
-                // Calculate loss (cross-entropy)
-                for(int i = 0; i < 3; i++)
+                // تبديل العينات
+                double tempLabel = trainLabels[idx1];
+                trainLabels[idx1] = trainLabels[idx2];
+                trainLabels[idx2] = tempLabel;
+                
+                for(int j = 0; j < 50; j++)
                 {
-                    if(labels[sample][i] > 0.5) // True label
-                        totalLoss -= MathLog(MathMax(outputs[i], 1e-15));
+                    double tempData = trainData[idx1][j];
+                    trainData[idx1][j] = trainData[idx2][j];
+                    trainData[idx2][j] = tempData;
                 }
-                
-                // Check accuracy
-                int predictedClass = 0, trueClass = 0;
-                for(int i = 1; i < 3; i++)
-                {
-                    if(outputs[i] > outputs[predictedClass]) predictedClass = i;
-                    if(labels[sample][i] > labels[sample][trueClass]) trueClass = i;
-                }
-                if(predictedClass == trueClass) correct++;
-                
-                // Backward pass
-                Backward(labels[sample], m_learningRate);
             }
             
-            m_lastAccuracy = (double)correct / samples * 100.0;
-            
-            if(epoch % 10 == 0)
+            for(int batch = 0; batch < numBatches; batch++)
             {
-                Print("العصر ", epoch, " - الخسارة: ", DoubleToString(totalLoss/samples, 4), 
-                      " الدقة: ", DoubleToString(m_lastAccuracy, 2), "%");
+                int batchStart = batch * batchSize;
+                int batchEnd = MathMin(batchStart + batchSize, trainSize);
+                double batchLoss = 0;
+                
+                // تدريب على الـ batch الحالي
+                for(int i = batchStart; i < batchEnd; i++)
+                {
+                    double inputs[50], outputs[3];
+                    for(int j = 0; j < 50; j++) inputs[j] = trainData[i][j];
+                    
+                    // Forward pass
+                    ForwardDetailed(inputs, outputs);
+                    
+                    // Prepare target
+                    double target[3] = {0, 0, 0};
+                    int labelIndex = (int)trainLabels[i];
+                    if(labelIndex >= 0 && labelIndex < 3) target[labelIndex] = 1.0;
+                    
+                    // Backward pass
+                    Backward(target, m_learningRate);
+                    
+                    // حساب خطأ الـ batch
+                    for(int k = 0; k < 3; k++)
+                        batchLoss += (target[k] - outputs[k]) * (target[k] - outputs[k]);
+                }
+                
+                epochTrainLoss += batchLoss / (batchEnd - batchStart);
+            }
+            
+            m_trainingLoss = epochTrainLoss / numBatches;
+            
+            // تقييم على بيانات التحقق كل 5 epochs
+            if(epoch % 5 == 0)
+            {
+                double valLoss = 0;
+                int correctPredictions = 0;
+                
+                for(int i = 0; i < valSize; i++)
+                {
+                    double inputs[50], outputs[3];
+                    for(int j = 0; j < 50; j++) inputs[j] = valData[i][j];
+                    
+                    ForwardDetailed(inputs, outputs);
+                    
+                    // حساب الدقة
+                    int predictedClass = 0;
+                    double maxOutput = outputs[0];
+                    for(int k = 1; k < 3; k++)
+                    {
+                        if(outputs[k] > maxOutput)
+                        {
+                            maxOutput = outputs[k];
+                            predictedClass = k;
+                        }
+                    }
+                    
+                    if(predictedClass == (int)valLabels[i])
+                        correctPredictions++;
+                    
+                    // حساب خطأ التحقق
+                    double target[3] = {0, 0, 0};
+                    int labelIndex = (int)valLabels[i];
+                    if(labelIndex >= 0 && labelIndex < 3) target[labelIndex] = 1.0;
+                    
+                    for(int k = 0; k < 3; k++)
+                        valLoss += (target[k] - outputs[k]) * (target[k] - outputs[k]);
+                }
+                
+                m_validationLoss = valLoss / (valSize * 3);
+                double valAccuracy = (double)correctPredictions / valSize * 100.0;
+                
+                Print("📈 Epoch ", epoch, ":");
+                Print("   🔥 Train Loss: ", DoubleToString(m_trainingLoss, 6));
+                Print("   📊 Val Loss: ", DoubleToString(m_validationLoss, 6));
+                Print("   🎯 Val Accuracy: ", DoubleToString(valAccuracy, 2), "%");
+                
+                // Early stopping logic
+                if(valAccuracy > m_bestValAccuracy)
+                {
+                    m_bestValAccuracy = valAccuracy;
+                    m_epochsWithoutImprovement = 0;
+                    
+                    // حفظ أفضل model حسب validation accuracy
+                    SaveModel("best_model.dat");
+                    Print("   ✅ أفضل نموذج محفوظ - دقة: ", DoubleToString(valAccuracy, 2), "%");
+                }
+                else
+                {
+                    m_epochsWithoutImprovement++;
+                    
+                    // Early stopping عند عدم التحسن لـ 10 epochs
+                    if(m_epochsWithoutImprovement >= 10)
+                    {
+                        Print("   ⏹️ إيقاف مبكر - لا تحسن لـ 10 epochs");
+                        LoadModel("best_model.dat"); // استرجاع أفضل نموذج
+                        break;
+                    }
+                }
+                
+                // الهدف: accuracy > 65%
+                if(valAccuracy > 65.0)
+                {
+                    Print("   🏆 تم الوصول للهدف - دقة: ", DoubleToString(valAccuracy, 2), "%");
+                    return true;
+                }
+            }
+            else if(epoch % 1 == 0) // تقرير مبسط كل epoch
+            {
+                Print("Epoch ", epoch, " - Train Loss: ", DoubleToString(m_trainingLoss, 6));
             }
         }
         
-        Print("انتهى التدريب - الدقة النهائية: ", DoubleToString(m_lastAccuracy, 2), "%");
-        return true;
+        Print("🏁 انتهاء التدريب:");
+        Print("   🏆 أفضل دقة: ", DoubleToString(m_bestValAccuracy, 2), "%");
+        Print("   📊 Epochs بدون تحسن: ", m_epochsWithoutImprovement);
+        
+        return m_bestValAccuracy > 50.0; // نجح إذا كانت الدقة > 50%
     }
     
     bool SaveModel(string filename)
