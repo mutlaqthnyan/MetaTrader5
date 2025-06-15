@@ -16,7 +16,7 @@
 #include <Trade\AccountInfo.mqh>
 #include <QuantumElite/NeuralNetwork.mqh>
 #include <QuantumElite/DataPreprocessor.mqh>
-#include <QuantumElite/RiskManagement.mqh>
+#include <QuantumElite/Risk_Management_System.mqh>
 
 #define QUANTUM_VERSION "4.0.0"
 #define MAX_SYMBOLS 100

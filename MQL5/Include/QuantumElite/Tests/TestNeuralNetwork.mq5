@@ -7,7 +7,7 @@
 #property version   "1.00"
 #property script_show_inputs
 
-#include "../RiskManagement.mqh"
+#include "../Risk_Management_System.mqh"
 
 input bool InpTestKellyCriterion = true;
 input bool InpTestCapitalProtection = true;
