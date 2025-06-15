@@ -1,797 +1,700 @@
 //+------------------------------------------------------------------+
-//|                       Risk Management System                     |
-//|                    نظام إدارة المخاطر المتقدم                    |
-//|                    Copyright 2024, Quantum Trading Systems       |
+//|                                           Risk_Management_System.mqh |
+//|                                  Copyright 2024, MetaQuotes Software Corp. |
+//|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
-#property copyright "Quantum Trading Systems"
+#property copyright "Copyright 2024, MetaQuotes Software Corp."
+#property link      "https://www.mql5.com"
 #property version   "1.00"
+#property strict
 
 #include <Trade\Trade.mqh>
-#include <Trade\PositionInfo.mqh>
-#include <Trade\AccountInfo.mqh>
+#include <Math\Stat\Math.mqh>
 
-enum ENUM_RISK_LEVEL
+//+------------------------------------------------------------------+
+//| Session Risk Profile Structure                                   |
+//+------------------------------------------------------------------+
+struct SessionRiskProfile
 {
-   RISK_LOW,
-   RISK_MEDIUM,
-   RISK_HIGH,
-   RISK_CRITICAL
+   double asianMultiplier;      // مخاطرة أقل
+   double londonMultiplier;     // مخاطرة أعلى  
+   double nyMultiplier;         // مخاطرة عادية
+   double overlapMultiplier;    // مخاطرة عالية
+   double newsMultiplier;       // مخاطرة منخفضة جداً
+   
+   SessionRiskProfile()
+   {
+      asianMultiplier = 0.7;
+      londonMultiplier = 1.2;
+      nyMultiplier = 1.0;
+      overlapMultiplier = 1.5;
+      newsMultiplier = 0.3;
+   }
 };
 
-struct RiskMetrics
+//+------------------------------------------------------------------+
+//| Trade History Structure                                          |
+//+------------------------------------------------------------------+
+struct TradeHistory
 {
-   double            dailyPnL;
-   double            weeklyPnL;
-   double            monthlyPnL;
-   double            maxDrawdown;
-   double            currentDrawdown;
-   double            portfolioHeat;
-   double            correlationRisk;
-   ENUM_RISK_LEVEL   riskLevel;
-   datetime          lastUpdate;
+   double profit;
+   bool isWin;
+   datetime closeTime;
+   string symbol;
 };
 
-struct PositionRisk
+//+------------------------------------------------------------------+
+//| Capital Protection Class                                         |
+//+------------------------------------------------------------------+
+class CCapitalProtection
 {
-   ulong             ticket;
-   string            symbol;
-   double            riskAmount;
-   double            riskPercent;
-   double            correlation;
-   datetime          openTime;
+private:
+   double m_dailyLossLimit;
+   double m_weeklyDrawdownLimit;
+   int m_maxConsecutiveLosses;
+   int m_currentConsecutiveLosses;
+   double m_dailyStartBalance;
+   double m_weeklyStartBalance;
+   datetime m_lastResetDate;
+   datetime m_lastWeeklyResetDate;
+   
+public:
+   CCapitalProtection();
+   ~CCapitalProtection();
+   
+   bool CheckDailyLimit();
+   bool CheckWeeklyDrawdown();
+   bool CheckConsecutiveLosses();
+   void AdjustRiskParameters();
+   void UpdateTradeResult(bool isWin);
+   void ResetDailyCounters();
+   void ResetWeeklyCounters();
 };
 
-struct TradeRecord
-{
-   datetime          closeTime;
-   double            profit;
-   double            riskAmount;
-   bool              isWin;
-   string            symbol;
-};
-
+//+------------------------------------------------------------------+
+//| Risk Management System Class                                    |
+//+------------------------------------------------------------------+
 class CRiskManagementSystem
 {
 private:
-   double            m_maxRiskPerTrade;
-   double            m_maxDailyRisk;
-   double            m_maxDrawdown;
-   double            m_accountBalance;
-   double            m_accountEquity;
+   CCapitalProtection* m_capitalProtection;
+   SessionRiskProfile m_sessionProfile;
+   TradeHistory m_tradeHistory[];
+   int m_historySize;
+   double m_baseRiskPercent;
+   double m_maxKellyPercent;
+   double m_minKellyPercent;
+   double m_maxCurrencyExposure;
+   double m_maxCorrelationThreshold;
    
-   double            m_currentDailyRisk;
-   double            m_currentDrawdown;
-   double            m_currentPortfolioHeat;
-   double            m_maxCorrelation;
+   // Private methods
+   double CalculateWinRate(int lookbackPeriods);
+   double CalculateAverageWin();
+   double CalculateAverageLoss();
+   double GetSessionMultiplier();
+   bool IsNewsTime();
+   void LoadTradeHistory();
+   void UpdateTradeHistory(double profit, bool isWin, string symbol);
    
-   RiskMetrics       m_riskMetrics;
-   PositionRisk      m_positionRisks[];
-   
-   TradeRecord       m_tradeHistory[100];
-   int               m_tradeHistoryCount;
-   int               m_consecutiveLosses;
-   datetime          m_lastTradeTime;
-   double            m_weeklyDrawdownStart;
-   datetime          m_weeklyDrawdownTime;
-   
-   CPositionInfo     m_position;
-   CAccountInfo      m_account;
-   CTrade            m_trade;
-   
-   bool              m_emergencyMode;
-   datetime          m_lastRiskCheck;
-
 public:
-                     CRiskManagementSystem();
-                    ~CRiskManagementSystem();
+   CRiskManagementSystem();
+   ~CRiskManagementSystem();
    
-   bool              Initialize(double maxRiskPerTrade, double maxDailyRisk, double maxDrawdown);
-   void              Deinitialize();
+   // Kelly Criterion Implementation
+   double CalculateKellySize(string symbol);
    
-   bool              IsTradeAllowed(string symbol, double riskAmount);
-   int               CountPositionsForSymbol(string symbol);
-   double            CalculatePositionSize(string symbol, double entryPrice, double stopLoss);
-   double            CalculateRiskAmount(string symbol, double entryPrice, double stopLoss);
+   // Correlation Management
+   double CheckCorrelationRisk(string symbol);
+   double CalculateCurrencyExposure(string baseCurrency);
    
-   bool              CheckRiskLimits();
-   void              UpdateRiskMetrics();
-   void              UpdatePortfolioHeat();
-   double            CheckCorrelationRisk(string symbol);
+   // Position Sizing
+   double CalculatePositionSize(string symbol, double stopLoss);
    
-   ENUM_RISK_LEVEL   GetCurrentRiskLevel();
-   double            GetDailyPnL();
-   double            GetCurrentDrawdown();
-   double            GetPortfolioHeat();
+   // Risk Validation
+   bool ValidateTradeRisk(string symbol, double lotSize);
    
-   bool              EmergencyCloseAll();
-   void              SetEmergencyMode(bool enabled) { m_emergencyMode = enabled; }
-   bool              IsEmergencyMode() { return m_emergencyMode; }
+   // Settings
+   void SetBaseRiskPercent(double riskPercent) { m_baseRiskPercent = riskPercent; }
+   void SetKellyLimits(double minPercent, double maxPercent);
+   void SetCorrelationThreshold(double threshold) { m_maxCorrelationThreshold = threshold; }
+   void SetMaxCurrencyExposure(double exposure) { m_maxCurrencyExposure = exposure; }
    
-   string            GenerateRiskReport();
-   void              LogRiskEvent(string message);
-   
-   double            CalculateCorrelation(string symbol1, string symbol2);
-   double            CalculateVolatilityAdjustment(string symbol);
-   bool              ValidateRiskParameters();
-   
-   double            CalculateKellyCriterion();
-   void              UpdateTradeHistory(double profit, double riskAmount, string symbol);
-   bool              CheckCapitalProtection();
-   void              CheckWeeklyDrawdown();
-   double            CalculateCurrencyExposure(string currency);
-   bool              CheckEnhancedCorrelationRisk(string symbol);
-   double            GetSessionRiskMultiplier();
+   // Getters
+   double GetCurrentRiskLevel();
+   string GetRiskStatus();
 };
 
+//+------------------------------------------------------------------+
+//| Constructor                                                      |
+//+------------------------------------------------------------------+
+CCapitalProtection::CCapitalProtection()
+{
+   m_dailyLossLimit = 0.05;  // 5% daily loss limit
+   m_weeklyDrawdownLimit = 0.10;  // 10% weekly drawdown limit
+   m_maxConsecutiveLosses = 5;
+   m_currentConsecutiveLosses = 0;
+   m_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   m_weeklyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   m_lastResetDate = TimeCurrent();
+   m_lastWeeklyResetDate = TimeCurrent();
+}
+
+//+------------------------------------------------------------------+
+//| Destructor                                                       |
+//+------------------------------------------------------------------+
+CCapitalProtection::~CCapitalProtection()
+{
+}
+
+//+------------------------------------------------------------------+
+//| Check Daily Loss Limit                                          |
+//+------------------------------------------------------------------+
+bool CCapitalProtection::CheckDailyLimit()
+{
+   datetime currentTime = TimeCurrent();
+   MqlDateTime timeStruct;
+   TimeToStruct(currentTime, timeStruct);
+   
+   MqlDateTime lastResetStruct;
+   TimeToStruct(m_lastResetDate, lastResetStruct);
+   
+   // Reset daily counters if new day
+   if(timeStruct.day != lastResetStruct.day)
+   {
+      ResetDailyCounters();
+   }
+   
+   double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double dailyLoss = (m_dailyStartBalance - currentBalance) / m_dailyStartBalance;
+   
+   if(dailyLoss > m_dailyLossLimit)
+   {
+      Print("⚠️ Daily loss limit exceeded: ", DoubleToString(dailyLoss * 100, 2), "%");
+      return false;
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Check Weekly Drawdown                                           |
+//+------------------------------------------------------------------+
+bool CCapitalProtection::CheckWeeklyDrawdown()
+{
+   datetime currentTime = TimeCurrent();
+   
+   // Check if a week has passed
+   if(currentTime - m_lastWeeklyResetDate > 7 * 24 * 3600)
+   {
+      ResetWeeklyCounters();
+   }
+   
+   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double weeklyDrawdown = (m_weeklyStartBalance - currentEquity) / m_weeklyStartBalance;
+   
+   if(weeklyDrawdown > m_weeklyDrawdownLimit)
+   {
+      Print("⚠️ Weekly drawdown limit exceeded: ", DoubleToString(weeklyDrawdown * 100, 2), "%");
+      return false;
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Check Consecutive Losses                                        |
+//+------------------------------------------------------------------+
+bool CCapitalProtection::CheckConsecutiveLosses()
+{
+   if(m_currentConsecutiveLosses >= m_maxConsecutiveLosses)
+   {
+      Print("⚠️ Maximum consecutive losses reached: ", m_currentConsecutiveLosses);
+      return false;
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Adjust Risk Parameters                                          |
+//+------------------------------------------------------------------+
+void CCapitalProtection::AdjustRiskParameters()
+{
+   // Implementation for dynamic risk adjustment
+   // This will be called by the main risk management system
+}
+
+//+------------------------------------------------------------------+
+//| Update Trade Result                                             |
+//+------------------------------------------------------------------+
+void CCapitalProtection::UpdateTradeResult(bool isWin)
+{
+   if(isWin)
+   {
+      m_currentConsecutiveLosses = 0;
+   }
+   else
+   {
+      m_currentConsecutiveLosses++;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Reset Daily Counters                                           |
+//+------------------------------------------------------------------+
+void CCapitalProtection::ResetDailyCounters()
+{
+   m_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   m_lastResetDate = TimeCurrent();
+}
+
+//+------------------------------------------------------------------+
+//| Reset Weekly Counters                                          |
+//+------------------------------------------------------------------+
+void CCapitalProtection::ResetWeeklyCounters()
+{
+   m_weeklyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   m_lastWeeklyResetDate = TimeCurrent();
+}
+
+//+------------------------------------------------------------------+
+//| Risk Management System Constructor                              |
+//+------------------------------------------------------------------+
 CRiskManagementSystem::CRiskManagementSystem()
 {
-   m_maxRiskPerTrade = 1.0;
-   m_maxDailyRisk = 3.0;
-   m_maxDrawdown = 10.0;
-   m_accountBalance = 0;
-   m_accountEquity = 0;
+   m_capitalProtection = new CCapitalProtection();
+   m_historySize = 100;
+   m_baseRiskPercent = 0.02;  // 2% base risk
+   m_maxKellyPercent = 0.25;  // 25% max Kelly
+   m_minKellyPercent = 0.005; // 0.5% min Kelly
+   m_maxCurrencyExposure = 0.30; // 30% max currency exposure
+   m_maxCorrelationThreshold = 0.8; // 80% correlation threshold
    
-   m_currentDailyRisk = 0;
-   m_currentDrawdown = 0;
-   m_currentPortfolioHeat = 0;
-   m_maxCorrelation = 0.7;
-   
-   m_tradeHistoryCount = 0;
-   m_consecutiveLosses = 0;
-   m_lastTradeTime = 0;
-   m_weeklyDrawdownStart = 0;
-   m_weeklyDrawdownTime = 0;
-   
-   m_emergencyMode = false;
-   m_lastRiskCheck = 0;
-   
-   ZeroMemory(m_riskMetrics);
-   ZeroMemory(m_tradeHistory);
+   ArrayResize(m_tradeHistory, m_historySize);
+   LoadTradeHistory();
 }
 
+//+------------------------------------------------------------------+
+//| Risk Management System Destructor                              |
+//+------------------------------------------------------------------+
 CRiskManagementSystem::~CRiskManagementSystem()
 {
-   Deinitialize();
+   if(m_capitalProtection != NULL)
+   {
+      delete m_capitalProtection;
+      m_capitalProtection = NULL;
+   }
 }
 
-bool CRiskManagementSystem::Initialize(double maxRiskPerTrade, double maxDailyRisk, double maxDrawdown)
+//+------------------------------------------------------------------+
+//| Calculate Kelly Criterion Size                                  |
+//+------------------------------------------------------------------+
+double CRiskManagementSystem::CalculateKellySize(string symbol)
 {
-   m_maxRiskPerTrade = maxRiskPerTrade;
-   m_maxDailyRisk = maxDailyRisk;
-   m_maxDrawdown = maxDrawdown;
+   // Validate account balance
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double margin = AccountInfoDouble(ACCOUNT_MARGIN);
    
-   // تحديث معلومات الحساب تلقائياً عند الاستعلام
-   if(m_account.Balance() <= 0)
+   if(balance <= 0)
    {
-      Print("فشل في الحصول على معلومات الحساب");
-      return false;
-   }
-   
-   m_accountBalance = m_account.Balance();
-   m_accountEquity = m_account.Equity();
-   
-   ArrayResize(m_positionRisks, 0);
-   
-   UpdateRiskMetrics();
-   
-   Print("تم تهيئة نظام إدارة المخاطر بنجاح");
-   return true;
-}
-
-void CRiskManagementSystem::Deinitialize()
-{
-   ArrayFree(m_positionRisks);
-}
-
-int CRiskManagementSystem::CountPositionsForSymbol(string symbol)
-{
-   int count = 0;
-   for(int i = 0; i < PositionsTotal(); i++)
-   {
-      if(PositionSelectByTicket(PositionGetTicket(i)))
-      {
-         if(PositionGetString(POSITION_SYMBOL) == symbol)
-         {
-            count++;
-         }
-      }
-   }
-   return count;
-}
-
-bool CRiskManagementSystem::IsTradeAllowed(string symbol, double riskAmount)
-{
-   if(!CheckCapitalProtection())
-   {
-      return false;
-   }
-   
-   if(!CheckEnhancedCorrelationRisk(symbol))
-   {
-      return false;
-   }
-   
-   if(m_emergencyMode)
-   {
-      Print("وضع الطوارئ نشط - لا يُسمح بصفقات جديدة");
-      return false;
-   }
-   
-   UpdateRiskMetrics();
-   
-   if(m_currentDailyRisk + (riskAmount / m_accountBalance * 100) > m_maxDailyRisk)
-   {
-      Print("تجاوز الحد الأقصى للمخاطرة اليومية");
-      return false;
-   }
-   
-   if(m_currentDrawdown > m_maxDrawdown)
-   {
-      Print("تجاوز الحد الأقصى للسحب");
-      return false;
-   }
-   
-   if(CheckCorrelationRisk(symbol) > m_maxCorrelation)
-   {
-      Print("مخاطرة الارتباط عالية جداً للرمز: ", symbol);
-      return false;
-   }
-   
-   if(PositionsTotal() >= 10)
-   {
-      Print("تم الوصول للحد الأقصى من الصفقات المتزامنة");
-      return false;
-   }
-   
-   // Note: InpMaxPositionsPerSymbol is defined in the main EA files
-   // This check will be handled by the main EA's IsTradeAllowed function
-   
-   return true;
-}
-
-double CRiskManagementSystem::CalculatePositionSize(string symbol, double entryPrice, double stopLoss)
-{
-   if(entryPrice <= 0 || stopLoss <= 0 || MathAbs(entryPrice - stopLoss) < 0.00001)
-   {
+      Print("⚠️ Invalid balance: ", balance);
       return 0;
    }
    
-   if(!CheckCapitalProtection()) return 0;
-   if(!CheckEnhancedCorrelationRisk(symbol)) return 0;
-   
-   double kellyRisk = CalculateKellyCriterion();
-   double sessionMultiplier = GetSessionRiskMultiplier();
-   double adjustedRisk = kellyRisk * sessionMultiplier;
-   
-   double riskAmount = m_accountBalance * adjustedRisk / 100;
-   double stopDistance = MathAbs(entryPrice - stopLoss);
-   
-   double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
-   double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-   
-   if(tickValue <= 0 || tickSize <= 0 || contractSize <= 0)
+   if(equity < balance * 0.5)
    {
-      Print("معلومات الرمز غير صحيحة: ", symbol);
+      Print("⚠️ Equity < 50% of balance!");
       return 0;
    }
    
-   double volume = riskAmount / (stopDistance / tickSize * tickValue);
+   // Calculate from last 100 trades
+   double winRate = CalculateWinRate(100);
+   double avgWin = CalculateAverageWin();
+   double avgLoss = CalculateAverageLoss();
    
-   double volatilityAdjustment = CalculateVolatilityAdjustment(symbol);
-   volume *= volatilityAdjustment;
+   // Avoid division by zero
+   if(avgLoss == 0) avgLoss = 0.0001;
    
-   double minVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-   double maxVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
-   double stepVolume = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   // Kelly formula: f = (p × b - q) / b
+   // where: p = win rate, q = 1-p, b = win/loss ratio
+   double winLossRatio = avgWin / MathAbs(avgLoss);
+   double lossRate = 1.0 - winRate;
    
-   volume = MathMax(volume, minVolume);
-   volume = MathMin(volume, maxVolume);
-   volume = MathRound(volume / stepVolume) * stepVolume;
+   double kellyPercent = (winRate * winLossRatio - lossRate) / winLossRatio;
    
-   return volume;
-}
-
-double CRiskManagementSystem::CalculateRiskAmount(string symbol, double entryPrice, double stopLoss)
-{
-   double volume = CalculatePositionSize(symbol, entryPrice, stopLoss);
-   double stopDistance = MathAbs(entryPrice - stopLoss);
-   
-   double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
-   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
-   
-   return volume * (stopDistance / tickSize) * tickValue;
-}
-
-bool CRiskManagementSystem::CheckRiskLimits()
-{
-   UpdateRiskMetrics();
-   
-   if(m_currentDailyRisk > m_maxDailyRisk)
+   // Validate Kelly calculation
+   if(kellyPercent > 1.0 || kellyPercent < 0)
    {
-      LogRiskEvent("تجاوز الحد الأقصى للمخاطرة اليومية: " + DoubleToString(m_currentDailyRisk, 2) + "%");
-      return false;
+      Print("Kelly calculation error: ", kellyPercent);
+      return m_baseRiskPercent;
    }
    
-   if(m_currentDrawdown > m_maxDrawdown)
-   {
-      LogRiskEvent("تجاوز الحد الأقصى للسحب: " + DoubleToString(m_currentDrawdown, 2) + "%");
-      SetEmergencyMode(true);
-      return false;
-   }
+   // Apply safety limits
+   kellyPercent = MathMax(kellyPercent, m_minKellyPercent);
+   kellyPercent = MathMin(kellyPercent, m_maxKellyPercent);
    
-   if(m_currentPortfolioHeat > 50.0)
-   {
-      LogRiskEvent("حرارة المحفظة عالية: " + DoubleToString(m_currentPortfolioHeat, 2) + "%");
-      return false;
-   }
+   // Adjust for market conditions
+   double sessionMultiplier = GetSessionMultiplier();
+   kellyPercent *= sessionMultiplier;
    
-   return true;
+   return kellyPercent;
 }
 
-void CRiskManagementSystem::UpdateRiskMetrics()
+//+------------------------------------------------------------------+
+//| Calculate Win Rate                                              |
+//+------------------------------------------------------------------+
+double CRiskManagementSystem::CalculateWinRate(int lookbackPeriods)
 {
-   // تحديث معلومات الحساب تلقائياً عند الاستعلام
-   m_accountBalance = m_account.Balance();
-   m_accountEquity = m_account.Equity();
+   if(ArraySize(m_tradeHistory) == 0) return 0.5; // Default 50% if no history
    
-   m_currentDailyRisk = (m_accountBalance - m_accountEquity) / m_accountBalance * 100;
-   if(m_currentDailyRisk < 0) m_currentDailyRisk = 0;
+   int wins = 0;
+   int totalTrades = MathMin(lookbackPeriods, ArraySize(m_tradeHistory));
    
-   double dailyPnL = GetDailyPnL();
-   m_currentDrawdown = -dailyPnL / m_accountBalance * 100;
-   if(m_currentDrawdown < 0) m_currentDrawdown = 0;
+   for(int i = 0; i < totalTrades; i++)
+   {
+      if(m_tradeHistory[i].isWin) wins++;
+   }
    
-   UpdatePortfolioHeat();
-   
-   m_riskMetrics.dailyPnL = dailyPnL;
-   m_riskMetrics.currentDrawdown = m_currentDrawdown;
-   m_riskMetrics.portfolioHeat = m_currentPortfolioHeat;
-   m_riskMetrics.riskLevel = GetCurrentRiskLevel();
-   m_riskMetrics.lastUpdate = TimeCurrent();
-   
-   m_lastRiskCheck = TimeCurrent();
+   return totalTrades > 0 ? (double)wins / totalTrades : 0.5;
 }
 
-void CRiskManagementSystem::UpdatePortfolioHeat()
+//+------------------------------------------------------------------+
+//| Calculate Average Win                                           |
+//+------------------------------------------------------------------+
+double CRiskManagementSystem::CalculateAverageWin()
 {
-   m_currentPortfolioHeat = 0;
+   double totalWins = 0;
+   int winCount = 0;
    
-   for(int i = 0; i < PositionsTotal(); i++)
+   for(int i = 0; i < ArraySize(m_tradeHistory); i++)
    {
-      if(m_position.SelectByIndex(i))
+      if(m_tradeHistory[i].isWin && m_tradeHistory[i].profit > 0)
       {
-         double positionRisk = MathAbs(PositionGetDouble(POSITION_PROFIT)) / m_accountBalance * 100;
-         m_currentPortfolioHeat += positionRisk;
-      }
-   }
-}
-
-double CRiskManagementSystem::CheckCorrelationRisk(string symbol)
-{
-   double maxCorrelation = 0;
-   
-   for(int i = 0; i < PositionsTotal(); i++)
-   {
-      if(m_position.SelectByIndex(i))
-      {
-         string posSymbol = PositionGetString(POSITION_SYMBOL);
-         if(posSymbol != symbol)
-         {
-            double correlation = CalculateCorrelation(symbol, posSymbol);
-            maxCorrelation = MathMax(maxCorrelation, correlation);
-         }
+         totalWins += m_tradeHistory[i].profit;
+         winCount++;
       }
    }
    
-   return maxCorrelation;
+   return winCount > 0 ? totalWins / winCount : 1.0;
 }
 
-ENUM_RISK_LEVEL CRiskManagementSystem::GetCurrentRiskLevel()
+//+------------------------------------------------------------------+
+//| Calculate Average Loss                                          |
+//+------------------------------------------------------------------+
+double CRiskManagementSystem::CalculateAverageLoss()
 {
-   if(m_currentDrawdown > m_maxDrawdown * 0.8 || m_currentDailyRisk > m_maxDailyRisk * 0.8)
-   {
-      return RISK_CRITICAL;
-   }
-   else if(m_currentDrawdown > m_maxDrawdown * 0.6 || m_currentDailyRisk > m_maxDailyRisk * 0.6)
-   {
-      return RISK_HIGH;
-   }
-   else if(m_currentDrawdown > m_maxDrawdown * 0.3 || m_currentDailyRisk > m_maxDailyRisk * 0.3)
-   {
-      return RISK_MEDIUM;
-   }
+   double totalLosses = 0;
+   int lossCount = 0;
    
-   return RISK_LOW;
-}
-
-double CRiskManagementSystem::GetDailyPnL()
-{
-   double dailyPnL = 0;
-   
-   for(int i = 0; i < PositionsTotal(); i++)
+   for(int i = 0; i < ArraySize(m_tradeHistory); i++)
    {
-      if(m_position.SelectByIndex(i))
+      if(!m_tradeHistory[i].isWin && m_tradeHistory[i].profit < 0)
       {
-         datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
-         MqlDateTime dt;
-         TimeToStruct(TimeCurrent(), dt);
-         dt.hour = 0; dt.min = 0; dt.sec = 0;
-         datetime todayStart = StructToTime(dt);
-         
-         if(openTime >= todayStart)
-         {
-            dailyPnL += PositionGetDouble(POSITION_PROFIT);
-         }
+         totalLosses += MathAbs(m_tradeHistory[i].profit);
+         lossCount++;
       }
    }
    
-   return dailyPnL;
+   return lossCount > 0 ? totalLosses / lossCount : 1.0;
 }
 
-double CRiskManagementSystem::GetCurrentDrawdown()
+//+------------------------------------------------------------------+
+//| Get Session Multiplier                                         |
+//+------------------------------------------------------------------+
+double CRiskManagementSystem::GetSessionMultiplier()
 {
-   return m_currentDrawdown;
-}
-
-double CRiskManagementSystem::GetPortfolioHeat()
-{
-   return m_currentPortfolioHeat;
-}
-
-bool CRiskManagementSystem::EmergencyCloseAll()
-{
-   Print("🚨 تفعيل إغلاق الطوارئ لجميع المراكز!");
+   if(IsNewsTime()) return m_sessionProfile.newsMultiplier;
    
-   bool allClosed = true;
+   MqlDateTime timeStruct;
+   TimeToStruct(TimeCurrent(), timeStruct);
+   int hour = timeStruct.hour;
    
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      if(m_position.SelectByIndex(i))
-      {
-         ulong ticket = PositionGetInteger(POSITION_TICKET);
-         string symbol = PositionGetString(POSITION_SYMBOL);
-         
-         if(!m_trade.PositionClose(ticket))
-         {
-            Print("فشل إغلاق المركز: ", ticket, " - الخطأ: ", GetLastError());
-            allClosed = false;
-         }
-         else
-         {
-            Print("تم إغلاق المركز: ", ticket, " للرمز: ", symbol);
-         }
-      }
-   }
+   // Asian Session (23:00-08:00 GMT)
+   if(hour >= 23 || hour < 8) return m_sessionProfile.asianMultiplier;
    
-   if(allClosed)
-   {
-      Print("✅ تم إغلاق جميع المراكز بنجاح");
-      SetEmergencyMode(false);
-   }
+   // London Session (08:00-17:00 GMT)
+   if(hour >= 8 && hour < 17) return m_sessionProfile.londonMultiplier;
    
-   return allClosed;
-}
-
-string CRiskManagementSystem::GenerateRiskReport()
-{
-   UpdateRiskMetrics();
+   // NY Session (13:00-22:00 GMT)
+   if(hour >= 13 && hour < 22) return m_sessionProfile.nyMultiplier;
    
-   string report = "تقرير إدارة المخاطر\n";
-   report += "═══════════════════════════════════\n";
-   report += "رصيد الحساب: " + DoubleToString(m_accountBalance, 2) + "\n";
-   report += "حقوق الملكية: " + DoubleToString(m_accountEquity, 2) + "\n";
-   report += "المخاطرة اليومية: " + DoubleToString(m_currentDailyRisk, 2) + "%\n";
-   report += "السحب الحالي: " + DoubleToString(m_currentDrawdown, 2) + "%\n";
-   report += "حرارة المحفظة: " + DoubleToString(m_currentPortfolioHeat, 2) + "%\n";
-   
-   string riskLevelStr = "";
-   switch(GetCurrentRiskLevel())
-   {
-      case RISK_LOW: riskLevelStr = "منخفض"; break;
-      case RISK_MEDIUM: riskLevelStr = "متوسط"; break;
-      case RISK_HIGH: riskLevelStr = "عالي"; break;
-      case RISK_CRITICAL: riskLevelStr = "حرج"; break;
-   }
-   
-   report += "مستوى المخاطرة: " + riskLevelStr + "\n";
-   report += "عدد المراكز النشطة: " + IntegerToString(PositionsTotal()) + "\n";
-   report += "وضع الطوارئ: " + (m_emergencyMode ? "نشط" : "غير نشط") + "\n";
-   
-   return report;
-}
-
-void CRiskManagementSystem::LogRiskEvent(string message)
-{
-   Print("⚠️ حدث مخاطرة: ", message);
-}
-
-double CRiskManagementSystem::CalculateCorrelation(string symbol1, string symbol2)
-{
-   double close1[], close2[];
-   ArraySetAsSeries(close1, true);
-   ArraySetAsSeries(close2, true);
-   
-   int periods = 50;
-   
-   if(CopyClose(symbol1, PERIOD_CURRENT, 0, periods, close1) != periods ||
-      CopyClose(symbol2, PERIOD_CURRENT, 0, periods, close2) != periods)
-   {
-      return 0;
-   }
-   
-   double returns1[50], returns2[50];
-   
-   for(int i = 0; i < periods - 1; i++)
-   {
-      returns1[i] = (close1[i] - close1[i+1]) / close1[i+1];
-      returns2[i] = (close2[i] - close2[i+1]) / close2[i+1];
-   }
-   
-   double mean1 = 0, mean2 = 0;
-   for(int i = 0; i < periods - 1; i++)
-   {
-      mean1 += returns1[i];
-      mean2 += returns2[i];
-   }
-   mean1 /= (periods - 1);
-   mean2 /= (periods - 1);
-   
-   double numerator = 0, denominator1 = 0, denominator2 = 0;
-   
-   for(int i = 0; i < periods - 1; i++)
-   {
-      double diff1 = returns1[i] - mean1;
-      double diff2 = returns2[i] - mean2;
-      
-      numerator += diff1 * diff2;
-      denominator1 += diff1 * diff1;
-      denominator2 += diff2 * diff2;
-   }
-   
-   if(denominator1 == 0 || denominator2 == 0)
-      return 0;
-   
-   return numerator / MathSqrt(denominator1 * denominator2);
-}
-
-double CRiskManagementSystem::CalculateVolatilityAdjustment(string symbol)
-{
-   double high[], low[], close[];
-   ArraySetAsSeries(high, true);
-   ArraySetAsSeries(low, true);
-   ArraySetAsSeries(close, true);
-   
-   CopyHigh(symbol, PERIOD_CURRENT, 0, 20, high);
-   CopyLow(symbol, PERIOD_CURRENT, 0, 20, low);
-   CopyClose(symbol, PERIOD_CURRENT, 0, 20, close);
-   
-   double atr = 0;
-   for(int i = 1; i < 15; i++)
-   {
-      double tr = MathMax(high[i] - low[i], 
-                  MathMax(MathAbs(high[i] - close[i+1]), 
-                          MathAbs(low[i] - close[i+1])));
-      atr += tr;
-   }
-   atr /= 14;
-   
-   double volatilityRatio = atr / close[0];
-   
-   if(volatilityRatio > 0.03)
-   {
-      return 0.5;
-   }
-   else if(volatilityRatio > 0.02)
-   {
-      return 0.7;
-   }
-   else if(volatilityRatio > 0.01)
-   {
-      return 0.9;
-   }
+   // Overlap periods get higher multiplier
+   if((hour >= 8 && hour < 12) || (hour >= 13 && hour < 17))
+      return m_sessionProfile.overlapMultiplier;
    
    return 1.0;
 }
 
-bool CRiskManagementSystem::ValidateRiskParameters()
+//+------------------------------------------------------------------+
+//| Check if News Time                                             |
+//+------------------------------------------------------------------+
+bool CRiskManagementSystem::IsNewsTime()
 {
-   if(m_maxRiskPerTrade <= 0 || m_maxRiskPerTrade > 10)
+   // This should be implemented with a news calendar
+   // For now, return false as placeholder
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check Correlation Risk                                          |
+//+------------------------------------------------------------------+
+double CRiskManagementSystem::CheckCorrelationRisk(string symbol)
+{
+   // Get all open positions
+   int totalPositions = PositionsTotal();
+   double maxCorrelation = 0.0;
+   
+   for(int i = 0; i < totalPositions; i++)
    {
-      Print("مخاطرة الصفقة الواحدة غير صحيحة: ", m_maxRiskPerTrade);
+      string positionSymbol = PositionGetSymbol(i);
+      if(positionSymbol == symbol) continue;
+      
+      // Calculate correlation between symbols
+      // This is a simplified implementation
+      double correlation = CalculateSymbolCorrelation(symbol, positionSymbol);
+      maxCorrelation = MathMax(maxCorrelation, correlation);
+   }
+   
+   if(maxCorrelation > m_maxCorrelationThreshold)
+   {
+      Print("⚠️ High correlation risk detected: ", DoubleToString(maxCorrelation, 3));
+      return 0.0; // Reject trade
+   }
+   
+   return 1.0 - (maxCorrelation * 0.5); // Reduce position size based on correlation
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Symbol Correlation                                   |
+//+------------------------------------------------------------------+
+double CRiskManagementSystem::CalculateSymbolCorrelation(string symbol1, string symbol2)
+{
+   // Simplified correlation calculation
+   // In a real implementation, this would calculate price correlation
+   // over a specific period using historical data
+   
+   string base1 = StringSubstr(symbol1, 0, 3);
+   string quote1 = StringSubstr(symbol1, 3, 3);
+   string base2 = StringSubstr(symbol2, 0, 3);
+   string quote2 = StringSubstr(symbol2, 3, 3);
+   
+   // High correlation if same base or quote currency
+   if(base1 == base2 || quote1 == quote2 || base1 == quote2 || quote1 == base2)
+      return 0.8;
+   
+   // Medium correlation for related currencies (example: EUR/GBP correlation)
+   if((base1 == "EUR" && base2 == "GBP") || (base1 == "GBP" && base2 == "EUR"))
+      return 0.6;
+   
+   return 0.2; // Low default correlation
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Currency Exposure                                    |
+//+------------------------------------------------------------------+
+double CRiskManagementSystem::CalculateCurrencyExposure(string baseCurrency)
+{
+   double totalExposure = 0.0;
+   double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   
+   int totalPositions = PositionsTotal();
+   
+   for(int i = 0; i < totalPositions; i++)
+   {
+      string positionSymbol = PositionGetSymbol(i);
+      string positionBase = StringSubstr(positionSymbol, 0, 3);
+      string positionQuote = StringSubstr(positionSymbol, 3, 3);
+      
+      if(positionBase == baseCurrency || positionQuote == baseCurrency)
+      {
+         double positionVolume = PositionGetDouble(POSITION_VOLUME);
+         double positionValue = positionVolume * SymbolInfoDouble(positionSymbol, SYMBOL_TRADE_TICK_VALUE);
+         totalExposure += positionValue;
+      }
+   }
+   
+   double exposurePercent = totalExposure / accountBalance;
+   
+   if(exposurePercent > m_maxCurrencyExposure)
+   {
+      Print("⚠️ Currency exposure limit exceeded for ", baseCurrency, ": ", 
+            DoubleToString(exposurePercent * 100, 2), "%");
+      return 0.0;
+   }
+   
+   return 1.0 - (exposurePercent / m_maxCurrencyExposure);
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Position Size                                         |
+//+------------------------------------------------------------------+
+double CRiskManagementSystem::CalculatePositionSize(string symbol, double stopLoss)
+{
+   // Check capital protection first
+   if(!m_capitalProtection.CheckDailyLimit() || 
+      !m_capitalProtection.CheckWeeklyDrawdown() || 
+      !m_capitalProtection.CheckConsecutiveLosses())
+   {
+      return 0.0;
+   }
+   
+   // Calculate Kelly size
+   double kellySize = CalculateKellySize(symbol);
+   
+   // Check correlation risk
+   double correlationMultiplier = CheckCorrelationRisk(symbol);
+   if(correlationMultiplier == 0.0) return 0.0;
+   
+   // Check currency exposure
+   string baseCurrency = StringSubstr(symbol, 0, 3);
+   double exposureMultiplier = CalculateCurrencyExposure(baseCurrency);
+   if(exposureMultiplier == 0.0) return 0.0;
+   
+   // Calculate final position size
+   double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double riskAmount = accountBalance * kellySize * correlationMultiplier * exposureMultiplier;
+   
+   // Calculate lot size based on stop loss
+   double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   double pointValue = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   
+   if(stopLoss <= 0 || tickValue <= 0 || pointValue <= 0)
+   {
+      Print("⚠️ Invalid parameters for position size calculation");
+      return 0.0;
+   }
+   
+   double stopLossPoints = stopLoss / pointValue;
+   double lotSize = riskAmount / (stopLossPoints * tickValue);
+   
+   // Apply minimum and maximum lot size limits
+   double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   
+   lotSize = MathMax(lotSize, minLot);
+   lotSize = MathMin(lotSize, maxLot);
+   
+   // Round to lot step
+   lotSize = MathRound(lotSize / lotStep) * lotStep;
+   
+   return lotSize;
+}
+
+//+------------------------------------------------------------------+
+//| Validate Trade Risk                                             |
+//+------------------------------------------------------------------+
+bool CRiskManagementSystem::ValidateTradeRisk(string symbol, double lotSize)
+{
+   // Final validation before trade execution
+   if(lotSize <= 0) return false;
+   
+   // Check margin requirements
+   double marginRequired = 0;
+   if(!OrderCalcMargin(ORDER_TYPE_BUY, symbol, lotSize, 
+                       SymbolInfoDouble(symbol, SYMBOL_ASK), marginRequired))
+   {
+      Print("⚠️ Cannot calculate margin for ", symbol);
       return false;
    }
    
-   if(m_maxDailyRisk <= 0 || m_maxDailyRisk > 20)
+   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   if(marginRequired > freeMargin * 0.8) // Use max 80% of free margin
    {
-      Print("المخاطرة اليومية غير صحيحة: ", m_maxDailyRisk);
-      return false;
-   }
-   
-   if(m_maxDrawdown <= 0 || m_maxDrawdown > 50)
-   {
-      Print("حد السحب الأقصى غير صحيح: ", m_maxDrawdown);
+      Print("⚠️ Insufficient margin. Required: ", marginRequired, 
+            ", Available: ", freeMargin);
       return false;
    }
    
    return true;
 }
 
-double CRiskManagementSystem::CalculateKellyCriterion()
+//+------------------------------------------------------------------+
+//| Load Trade History                                              |
+//+------------------------------------------------------------------+
+void CRiskManagementSystem::LoadTradeHistory()
 {
-    if(m_tradeHistoryCount < 20) 
-    {
-        Print("عدد الصفقات قليل للـ Kelly Criterion، استخدام المخاطرة الافتراضية");
-        return m_maxRiskPerTrade;
-    }
-    
-    int wins = 0;
-    double totalWinAmount = 0, totalLossAmount = 0;
-    
-    for(int i = 0; i < m_tradeHistoryCount; i++)
-    {
-        if(m_tradeHistory[i].isWin)
-        {
-            wins++;
-            totalWinAmount += m_tradeHistory[i].profit;
-        }
-        else
-        {
-            totalLossAmount += MathAbs(m_tradeHistory[i].profit);
-        }
-    }
-    
-    if(wins == 0 || wins == m_tradeHistoryCount)
-    {
-        Print("جميع الصفقات رابحة أو خاسرة، استخدام المخاطرة الافتراضية");
-        return m_maxRiskPerTrade;
-    }
-    
-    double p = (double)wins / m_tradeHistoryCount;
-    double q = 1.0 - p;
-    double avgWin = totalWinAmount / wins;
-    double avgLoss = totalLossAmount / (m_tradeHistoryCount - wins);
-    double b = avgWin / avgLoss;
-    
-    double f = (p * b - q) / b;
-    
-    f = MathMax(f, 0.005);
-    f = MathMin(f, 0.25);
-    
-    Print("Kelly Criterion: p=", DoubleToString(p, 3), " b=", DoubleToString(b, 3), " f=", DoubleToString(f, 3));
-    
-    return f * 100;
+   // Load historical trades from account history
+   // This is a simplified implementation
+   int historyTotal = HistoryDealsTotal();
+   int loadedTrades = 0;
+   
+   for(int i = historyTotal - 1; i >= 0 && loadedTrades < m_historySize; i--)
+   {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket > 0)
+      {
+         double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+         datetime closeTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+         string symbol = HistoryDealGetString(ticket, DEAL_SYMBOL);
+         
+         m_tradeHistory[loadedTrades].profit = profit;
+         m_tradeHistory[loadedTrades].isWin = profit > 0;
+         m_tradeHistory[loadedTrades].closeTime = closeTime;
+         m_tradeHistory[loadedTrades].symbol = symbol;
+         
+         loadedTrades++;
+      }
+   }
 }
 
-bool CRiskManagementSystem::CheckCapitalProtection()
+//+------------------------------------------------------------------+
+//| Update Trade History                                            |
+//+------------------------------------------------------------------+
+void CRiskManagementSystem::UpdateTradeHistory(double profit, bool isWin, string symbol)
 {
-    double dailyPnL = GetDailyPnL();
-    if(dailyPnL < -m_accountBalance * 0.05)
-    {
-        LogRiskEvent("تم تجاوز حد الخسارة اليومية 5%: " + DoubleToString(dailyPnL, 2));
-        SetEmergencyMode(true);
-        return false;
-    }
-    
-    CheckWeeklyDrawdown();
-    
-    if(m_consecutiveLosses >= 5)
-    {
-        LogRiskEvent("تم الوصول لـ 5 خسائر متتالية - إيقاف مؤقت");
-        SetEmergencyMode(true);
-        return false;
-    }
-    
-    return true;
+   // Shift array and add new trade
+   for(int i = ArraySize(m_tradeHistory) - 1; i > 0; i--)
+   {
+      m_tradeHistory[i] = m_tradeHistory[i-1];
+   }
+   
+   m_tradeHistory[0].profit = profit;
+   m_tradeHistory[0].isWin = isWin;
+   m_tradeHistory[0].closeTime = TimeCurrent();
+   m_tradeHistory[0].symbol = symbol;
+   
+   // Update capital protection
+   m_capitalProtection.UpdateTradeResult(isWin);
 }
 
-void CRiskManagementSystem::CheckWeeklyDrawdown()
+//+------------------------------------------------------------------+
+//| Set Kelly Limits                                               |
+//+------------------------------------------------------------------+
+void CRiskManagementSystem::SetKellyLimits(double minPercent, double maxPercent)
 {
-    MqlDateTime dt;
-    TimeToStruct(TimeCurrent(), dt);
-    datetime weekStart = TimeCurrent() - (dt.day_of_week * 24 * 3600);
-    
-    if(m_weeklyDrawdownTime < weekStart)
-    {
-        m_weeklyDrawdownStart = m_accountEquity;
-        m_weeklyDrawdownTime = weekStart;
-    }
-    
-    double weeklyDrawdown = (m_weeklyDrawdownStart - m_accountEquity) / m_weeklyDrawdownStart;
-    if(weeklyDrawdown > 0.10)
-    {
-        m_maxRiskPerTrade *= 0.5;
-        LogRiskEvent("تقليل حجم المخاطرة بسبب السحب الأسبوعي > 10%: " + DoubleToString(weeklyDrawdown * 100, 2) + "%");
-    }
+   m_minKellyPercent = MathMax(minPercent, 0.001); // Minimum 0.1%
+   m_maxKellyPercent = MathMin(maxPercent, 0.5);   // Maximum 50%
 }
 
-double CRiskManagementSystem::CalculateCurrencyExposure(string currency)
+//+------------------------------------------------------------------+
+//| Get Current Risk Level                                          |
+//+------------------------------------------------------------------+
+double CRiskManagementSystem::GetCurrentRiskLevel()
 {
-    double totalExposure = 0;
-    
-    for(int i = 0; i < PositionsTotal(); i++)
-    {
-        if(m_position.SelectByIndex(i))
-        {
-            string symbol = PositionGetString(POSITION_SYMBOL);
-            string baseCurrency = StringSubstr(symbol, 0, 3);
-            string quoteCurrency = StringSubstr(symbol, 3, 3);
-            
-            double positionValue = MathAbs(PositionGetDouble(POSITION_VOLUME) * PositionGetDouble(POSITION_PRICE_CURRENT));
-            
-            if(baseCurrency == currency || quoteCurrency == currency)
-            {
-                totalExposure += positionValue;
-            }
-        }
-    }
-    
-    return totalExposure / m_accountBalance;
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double margin = AccountInfoDouble(ACCOUNT_MARGIN);
+   
+   if(balance <= 0) return 0.0;
+   
+   double riskLevel = (margin / equity) * 100;
+   return riskLevel;
 }
 
-bool CRiskManagementSystem::CheckEnhancedCorrelationRisk(string symbol)
+//+------------------------------------------------------------------+
+//| Get Risk Status                                                 |
+//+------------------------------------------------------------------+
+string CRiskManagementSystem::GetRiskStatus()
 {
-    if(CheckCorrelationRisk(symbol) > 0.8)
-    {
-        LogRiskEvent("ارتباط عالي مع الصفقات المفتوحة: " + DoubleToString(CheckCorrelationRisk(symbol), 2));
-        return false;
-    }
-    
-    string baseCurrency = StringSubstr(symbol, 0, 3);
-    string quoteCurrency = StringSubstr(symbol, 3, 3);
-    
-    if(CalculateCurrencyExposure(baseCurrency) > 0.30 || CalculateCurrencyExposure(quoteCurrency) > 0.30)
-    {
-        LogRiskEvent("تجاوز حد التعرض للعملة 30%");
-        return false;
-    }
-    
-    return true;
+   double riskLevel = GetCurrentRiskLevel();
+   
+   if(riskLevel < 20) return "LOW";
+   else if(riskLevel < 50) return "MEDIUM";
+   else if(riskLevel < 80) return "HIGH";
+   else return "CRITICAL";
 }
 
-double CRiskManagementSystem::GetSessionRiskMultiplier()
-{
-    MqlDateTime dt;
-    TimeToStruct(TimeCurrent(), dt);
-    
-    if((dt.hour >= 8 && dt.hour <= 10) || (dt.hour >= 13 && dt.hour <= 15))
-    {
-        return 0.3;
-    }
-    
-    if(dt.hour >= 0 && dt.hour < 8) return 0.7;
-    if(dt.hour >= 8 && dt.hour < 16) return 1.2;
-    return 1.0;
-}
-
-void CRiskManagementSystem::UpdateTradeHistory(double profit, double riskAmount, string symbol)
-{
-    if(m_tradeHistoryCount >= 100)
-    {
-        for(int i = 0; i < 99; i++)
-        {
-            m_tradeHistory[i] = m_tradeHistory[i+1];
-        }
-        m_tradeHistoryCount = 99;
-    }
-    
-    m_tradeHistory[m_tradeHistoryCount].closeTime = TimeCurrent();
-    m_tradeHistory[m_tradeHistoryCount].profit = profit;
-    m_tradeHistory[m_tradeHistoryCount].riskAmount = riskAmount;
-    m_tradeHistory[m_tradeHistoryCount].isWin = profit > 0;
-    m_tradeHistory[m_tradeHistoryCount].symbol = symbol;
-    
-    if(profit > 0)
-    {
-        m_consecutiveLosses = 0;
-    }
-    else
-    {
-        m_consecutiveLosses++;
-    }
-    
-    m_tradeHistoryCount++;
-    m_lastTradeTime = TimeCurrent();
-    
-    Print("تحديث سجل الصفقات: ", symbol, " ربح=", DoubleToString(profit, 2), " خسائر متتالية=", m_consecutiveLosses);
-}
+//+------------------------------------------------------------------+
