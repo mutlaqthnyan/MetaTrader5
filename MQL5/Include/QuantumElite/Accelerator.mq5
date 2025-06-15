@@ -316,20 +316,40 @@ bool AnalyzeSymbol(string symbol, QuantumSignal &signal)
       score += GetMLPrediction(symbol);
    }
    
-   if(score > 75)
+   // نظام التسجيل المتوازن (0-100)
+   // 70-100 = إشارة شراء قوية
+   // 60-70 = إشارة شراء ضعيفة
+   // 40-60 = منطقة محايدة (لا تتداول)
+   // 30-40 = إشارة بيع ضعيفة
+   // 0-30 = إشارة بيع قوية
+   
+   if(score >= 70 || score <= 40)
    {
       signal.symbol = symbol;
       signal.confidence = score;
       signal.timestamp = TimeCurrent();
       signal.entryPrice = SymbolInfoDouble(symbol, SYMBOL_BID);
-      signal.direction = score > 80 ? 1 : -1;
+      
+      // تحديد الاتجاه بناءً على النظام المتوازن
+      if(score >= 70)
+      {
+         signal.direction = 1; // شراء (قوي أو ضعيف)
+         signal.reason = score >= 80 ? "إشارة شراء قوية - تحليل كمي متقدم" : "إشارة شراء ضعيفة - تحليل كمي متقدم";
+      }
+      else if(score <= 40)
+      {
+         signal.direction = -1; // بيع (قوي أو ضعيف)
+         signal.reason = score <= 30 ? "إشارة بيع قوية - تحليل كمي متقدم" : "إشارة بيع ضعيفة - تحليل كمي متقدم";
+      }
+      
       signal.stopLoss = signal.entryPrice * (1 - InpRiskPerTrade / 100);
       signal.takeProfit = signal.entryPrice * (1 + InpRiskPerTrade * 2 / 100);
-      signal.reason = "تحليل كمي متقدم";
       signal.isExecuted = false;
       
       return true;
    }
+   
+   // منطقة محايدة (40-60) - لا تتداول
    
    return false;
 }

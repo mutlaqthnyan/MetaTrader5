@@ -207,47 +207,7 @@ double                    g_totalProfit = 0;
 double                    g_winRate = 0;
 int                       g_lastSignal = -1; // لتتبع آخر إشارة
 
-int OnInit()
-{
-   Print("═══════════════════════════════════════════════════════════════");
-   Print("🎯 QUANTUM ELITE TRADER PRO v", QUANTUM_VERSION, " - بدء التهيئة");
-   Print("═══════════════════════════════════════════════════════════════");
 
-   g_trade.SetExpertMagicNumber(GetMagicNumber());
-   g_trade.SetDeviationInPoints(10);
-   g_trade.SetTypeFilling(ORDER_FILLING_FOK);
-
-   if(!InitializeSubsystems())
-   {
-      Print("❌ فشل في تهيئة الأنظمة الفرعية");
-      return INIT_FAILED;
-   }
-
-   g_isInitialized = true;
-   Print("✅ تمت التهيئة بنجاح!");
-
-   return INIT_SUCCEEDED;
-                
-        for(int i = 0; i < 20; i++)
-            for(int j = 0; j < 3; j++)
-                m_momentum_weights3[i][j] = 0.0;
-                
-        ArrayInitialize(m_momentum_biases1, 0.0);
-        ArrayInitialize(m_momentum_biases2, 0.0);
-        ArrayInitialize(m_momentum_biases3, 0.0);
-        
-        m_isInitialized = true;
-        return true;
-    }
-    
-    double Forward(double inputs[])
-    {
-        double outputs[3];
-        ForwardDetailed(inputs, outputs);
-        
-        // Return the index of highest probability as confidence score
-        int maxIndex = 0;
-        for(int i = 1; i < 3; i++)
             if(outputs[i] > outputs[maxIndex]) maxIndex = i;
         
         // Convert to trading score: Buy=100, Hold=50, Sell=0
@@ -1435,12 +1395,20 @@ void OnTimer()
    
    static datetime lastTraining = 0;
    static datetime lastCacheUpdate = 0;
+   static datetime lastAnalysis = 0;
    
    // Update indicator cache every 5 seconds
    if(TimeCurrent() - lastCacheUpdate >= 5)
    {
       UpdateIndicatorCache();
       lastCacheUpdate = TimeCurrent();
+   }
+   
+   // تحليل كل 5 ثواني بدل كل tick - تحسين الأداء
+   if(TimeCurrent() - lastAnalysis >= 5)
+   {
+      GenerateSignal();
+      lastAnalysis = TimeCurrent();
    }
    
    // Train neural network once per day (24 hours = 86400 seconds)
@@ -1938,17 +1906,35 @@ void GenerateSignal()
     double outputs[3];
     g_neuralNetwork.ForwardDetailed(features, outputs);
     
-    // 4️⃣ تحليل النتائج واتخاذ القرار
-    int decision = 0; // 0=Buy, 1=Sell, 2=Hold
-    double maxProb = outputs[0];
+    // 4️⃣ تحليل النتائج واتخاذ القرار بالنظام المتوازن
+    double buyProb = outputs[0] * 100;
+    double sellProb = outputs[1] * 100; 
+    double holdProb = outputs[2] * 100;
     
-    for(int i = 1; i < 3; i++)
+    int decision = 2; // افتراضي: Hold
+    double maxProb = 0;
+    
+    // تحديد الإشارة بناءً على النظام المتوازن (0-100)
+    // 70-100 = إشارة شراء قوية
+    // 60-70 = إشارة شراء ضعيفة  
+    // 40-60 = منطقة محايدة
+    // 30-40 = إشارة بيع ضعيفة
+    // 0-30 = إشارة بيع قوية
+    
+    if(buyProb >= 60)
     {
-        if(outputs[i] > maxProb)
-        {
-            maxProb = outputs[i];
-            decision = i;
-        }
+        decision = 0; // شراء
+        maxProb = outputs[0];
+    }
+    else if(sellProb >= 60)
+    {
+        decision = 1; // بيع
+        maxProb = outputs[1];
+    }
+    else
+    {
+        decision = 2; // منطقة محايدة - لا تتداول
+        maxProb = outputs[2];
     }
     
     // 5️⃣ طباعة القرار
@@ -1965,21 +1951,32 @@ void GenerateSignal()
           "% | Sell=", DoubleToString(outputs[1]*100, 1),
           "% | Hold=", DoubleToString(outputs[2]*100, 1), "%");
     
-    // 6️⃣ اختياري: تنفيذ الصفقة إذا كانت الثقة عالية
-    if(maxProb > 0.70) // ثقة أكثر من 70%
+    // 6️⃣ تنفيذ الصفقة بناءً على النظام المتوازن
+    if(decision != 2) // ليس في المنطقة المحايدة
     {
-        if(decision == 0 && g_lastSignal != 0)
+        if(decision == 0 && buyProb >= 60 && g_lastSignal != 0)
         {
-            // فتح صفقة شراء
+            // فتح صفقة شراء (قوية أو ضعيفة)
             g_lastSignal = 0;
+            Print("🟢 تنفيذ صفقة شراء - قوة الإشارة: ", 
+                  buyProb >= 70 ? "قوية" : "ضعيفة", 
+                  " (", DoubleToString(buyProb, 1), "%)");
             // OpenBuyTrade(); // إذا كانت موجودة
         }
-        else if(decision == 1 && g_lastSignal != 1)
+        else if(decision == 1 && sellProb >= 60 && g_lastSignal != 1)
         {
-            // فتح صفقة بيع
+            // فتح صفقة بيع (قوية أو ضعيفة)
             g_lastSignal = 1;
+            Print("🔴 تنفيذ صفقة بيع - قوة الإشارة: ", 
+                  sellProb >= 70 ? "قوية" : "ضعيفة", 
+                  " (", DoubleToString(sellProb, 1), "%)");
             // OpenSellTrade(); // إذا كانت موجودة
         }
+    }
+    else
+    {
+        Print("⏸️ منطقة محايدة - لا يتم التداول (Buy:", DoubleToString(buyProb, 1), 
+              "% | Sell:", DoubleToString(sellProb, 1), "%)");
     }
 }
 
@@ -2004,9 +2001,13 @@ void CalculateDynamicLevels(string symbol, TradingSignal &signal, MarketContext 
    }
    atr /= 14;
    
+   // تطبيق المعادلات المطلوبة باستخدام الدوال المحسنة
+   double volatilityMultiplier = GetVolatilityMultiplier(symbol);
+   double sessionFactor = GetSessionVolatilityFactor();
+   
    context.atr = atr;
    context.volatilityRatio = atr / close[0];
-   context.sessionMultiplier = InpSessionFactor;
+   context.sessionMultiplier = sessionFactor;
    context.timeframe = PERIOD_CURRENT;
    context.sessionStart = TimeCurrent();
    context.sessionEnd = TimeCurrent() + PeriodSeconds(PERIOD_D1);
@@ -2015,11 +2016,11 @@ void CalculateDynamicLevels(string symbol, TradingSignal &signal, MarketContext 
    if(SymbolInfoInteger(symbol, SYMBOL_DIGITS) == 5 || SymbolInfoInteger(symbol, SYMBOL_DIGITS) == 3)
       pipSize *= 10;
    
-   double enhancedVolatilityMultiplier = InpVolatilityMultiplier * context.volatilityRatio;
-   double enhancedSessionFactor = InpSessionFactor * context.sessionMultiplier;
-   
-   double slDistance = atr * enhancedVolatilityMultiplier * enhancedSessionFactor;
-   double tpDistance = atr * InpRiskRewardRatio * enhancedVolatilityMultiplier;
+   // تطبيق المعادلات المطلوبة:
+   // SL = Entry ± (ATR × VolatilityMultiplier × SessionFactor)
+   // TP = Entry ± (ATR × RiskRewardRatio × VolatilityMultiplier)
+   double slDistance = atr * volatilityMultiplier * sessionFactor;
+   double tpDistance = atr * InpRiskRewardRatio * volatilityMultiplier;
    
    double minSL = 10 * pipSize;
    double maxSL = 100 * pipSize;
@@ -2112,11 +2113,11 @@ double AnalyzeTrendDirection(string symbol)
       UpdateIndicatorCache(symbol, "EMA", 50, handleEMA50);
    }
    
-   int handleEMA200 = GetCachedIndicator(symbol, "SMA", 200);
+   int handleEMA200 = GetCachedIndicator(symbol, "EMA", 200);
    if(handleEMA200 == INVALID_HANDLE)
    {
-      handleEMA200 = iMA(symbol, PERIOD_CURRENT, 200, 0, MODE_SMA, PRICE_CLOSE);
-      UpdateIndicatorCache(symbol, "SMA", 200, handleEMA200);
+      handleEMA200 = iMA(symbol, PERIOD_CURRENT, 200, 0, MODE_EMA, PRICE_CLOSE);
+      UpdateIndicatorCache(symbol, "EMA", 200, handleEMA200);
    }
    
    if(handleEMA20 == INVALID_HANDLE || handleEMA50 == INVALID_HANDLE || handleEMA200 == INVALID_HANDLE)
@@ -2137,50 +2138,149 @@ double AnalyzeTrendDirection(string symbol)
       return 50.0;
    }
    
-   double score = 50.0;
+   double score = 50.0; // نقطة البداية المحايدة
    double currentPrice = SymbolInfoDouble(symbol, SYMBOL_BID);
    
+   // حساب قوة الاتجاه بدقة أكبر باستخدام EMA 20, 50, 200
+   
+   // 1. تحليل ترتيب المتوسطات المتحركة
+   double alignmentScore = 0.0;
    if(ema20[0] > ema50[0] && ema50[0] > ema200[0])
    {
-      score = 75.0;
-      if(ema20[0] > ema20[1] && ema50[0] > ema50[1])
-         score = 90.0;
-      if(currentPrice > ema20[0])
-         score = MathMin(100.0, score + 10.0);
+      // اتجاه صاعد قوي - جميع المتوسطات مرتبة صعودياً
+      alignmentScore = 30.0;
    }
    else if(ema20[0] < ema50[0] && ema50[0] < ema200[0])
    {
-      score = 25.0;
-      if(ema20[0] < ema20[1] && ema50[0] < ema50[1])
-         score = 10.0;
-      if(currentPrice < ema20[0])
-         score = MathMax(0.0, score - 10.0);
+      // اتجاه هابط قوي - جميع المتوسطات مرتبة هبوطياً
+      alignmentScore = -30.0;
    }
-   else if(ema20[0] > ema50[0] && ema50[0] < ema200[0])
+   else if(ema20[0] > ema50[0])
    {
-      score = 60.0;
+      // اتجاه صاعد ضعيف
+      alignmentScore = 15.0;
    }
-   else if(ema20[0] < ema50[0] && ema50[0] > ema200[0])
+   else if(ema20[0] < ema50[0])
    {
-      score = 40.0;
+      // اتجاه هابط ضعيف
+      alignmentScore = -15.0;
    }
+   
+   // 2. تحليل زخم المتوسطات (المقارنة مع الشمعة السابقة)
+   double momentumScore = 0.0;
+   if(ema20[0] > ema20[1] && ema50[0] > ema50[1])
+   {
+      // زخم صاعد قوي
+      momentumScore = 20.0;
+   }
+   else if(ema20[0] < ema20[1] && ema50[0] < ema50[1])
+   {
+      // زخم هابط قوي
+      momentumScore = -20.0;
+   }
+   else if(ema20[0] > ema20[1])
+   {
+      // زخم صاعد ضعيف
+      momentumScore = 10.0;
+   }
+   else if(ema20[0] < ema20[1])
+   {
+      // زخم هابط ضعيف
+      momentumScore = -10.0;
+   }
+   
+   // 3. تحليل موقع السعر بالنسبة للمتوسطات
+   double pricePositionScore = 0.0;
+   if(currentPrice > ema20[0] && currentPrice > ema50[0] && currentPrice > ema200[0])
+   {
+      // السعر فوق جميع المتوسطات - إشارة صعود قوية
+      pricePositionScore = 20.0;
+   }
+   else if(currentPrice < ema20[0] && currentPrice < ema50[0] && currentPrice < ema200[0])
+   {
+      // السعر تحت جميع المتوسطات - إشارة هبوط قوية
+      pricePositionScore = -20.0;
+   }
+   else if(currentPrice > ema20[0])
+   {
+      // السعر فوق المتوسط السريع
+      pricePositionScore = 10.0;
+   }
+   else if(currentPrice < ema20[0])
+   {
+      // السعر تحت المتوسط السريع
+      pricePositionScore = -10.0;
+   }
+   
+   // 4. حساب النتيجة النهائية (0-100)
+   score = 50.0 + alignmentScore + momentumScore + pricePositionScore;
+   score = MathMax(0.0, MathMin(100.0, score));
    
    return score;
 }
 
 double GetVolatilityMultiplier(string symbol)
 {
+   // حساب ATR الحالي (14 فترة) و ATR طويل المدى (50 فترة)
    double currentATR = CalculateATR(symbol, 14);
    double longTermATR = CalculateATR(symbol, 50);
    
-   if(longTermATR == 0.0) return 1.0;
+   // التحقق من صحة البيانات
+   if(currentATR <= 0.0 || longTermATR <= 0.0)
+   {
+      Print("تحذير: فشل في حساب ATR للرمز ", symbol);
+      return 1.0; // قيمة افتراضية آمنة
+   }
    
-   double ratio = currentATR / longTermATR;
+   // مقارنة ATR الحالي مع المتوسط طويل المدى
+   double volatilityRatio = currentATR / longTermATR;
    
-   if(ratio > 2.0) return 2.0;
-   if(ratio < 0.5) return 0.5;
+   // ضمان أن المعامل يقع بين 0.5-2.0
+   volatilityRatio = MathMax(0.5, MathMin(2.0, volatilityRatio));
    
-   return ratio;
+   // طباعة معلومات التشخيص
+   if(volatilityRatio >= 1.5)
+      Print("تقلبات عالية للرمز ", symbol, " - معامل: ", DoubleToString(volatilityRatio, 2));
+   else if(volatilityRatio <= 0.7)
+      Print("تقلبات منخفضة للرمز ", symbol, " - معامل: ", DoubleToString(volatilityRatio, 2));
+   
+   return volatilityRatio;
+}
+
+double GetSessionVolatilityFactor()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   int hour = dt.hour;
+   
+   // تحديد معامل التقلبات حسب الجلسة التداولية
+   // Asian: 0.7, London: 1.2, NY: 1.0, Overlap: 1.5
+   
+   if(hour >= 0 && hour < 8)
+   {
+      // الجلسة الآسيوية (00:00 - 08:00 GMT)
+      return 0.7;
+   }
+   else if(hour >= 8 && hour < 13)
+   {
+      // الجلسة الأوروبية/لندن (08:00 - 13:00 GMT)
+      return 1.2;
+   }
+   else if(hour >= 13 && hour < 17)
+   {
+      // فترة التداخل بين لندن ونيويورك (13:00 - 17:00 GMT)
+      return 1.5;
+   }
+   else if(hour >= 17 && hour < 22)
+   {
+      // الجلسة الأمريكية/نيويورك (17:00 - 22:00 GMT)
+      return 1.0;
+   }
+   else
+   {
+      // العودة للجلسة الآسيوية (22:00 - 00:00 GMT)
+      return 0.7;
+   }
 }
 
 bool ValidateSignal(TradingSignal &signal)
@@ -2265,38 +2365,7 @@ double CalculateATR(string symbol, int period)
    return result;
 }
 
-double GetSessionVolatilityFactor()
-{
-   datetime currentTime = TimeCurrent();
-   MqlDateTime timeStruct;
-   TimeToStruct(currentTime, timeStruct);
-   
-   int hour = timeStruct.hour;
-   
-   if(hour >= 0 && hour < 8)
-   {
-      return 0.7;
-   }
-   else if(hour >= 8 && hour < 13)
-   {
-      return 1.2;
-   }
-   else if(hour >= 13 && hour < 17)
-   {
-      if(hour >= 13 && hour < 15)
-         return 1.5;
-      else
-         return 1.2;
-   }
-   else if(hour >= 17 && hour < 22)
-   {
-      return 1.0;
-   }
-   else
-   {
-      return 0.8;
-   }
-}
+
 
 double GetMLPrediction(string symbol)
 {
