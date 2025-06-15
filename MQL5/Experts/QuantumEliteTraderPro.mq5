@@ -17,6 +17,7 @@
 #include <QuantumElite/NeuralNetwork.mqh>
 #include <QuantumElite/DataPreprocessor.mqh>
 #include <QuantumElite/RiskManagement.mqh>
+#include <QuantumElite/Pattern_Recognition_Engine.mqh>
 
 #define QUANTUM_VERSION "4.0.0"
 #define MAX_SYMBOLS 100
@@ -1460,9 +1461,35 @@ void AnalyzeSymbol(SymbolData &symbolData)
    if(InpPatternRecognition)
    {
       PatternData pattern;
+      
+      // Chart Patterns Detection
       if(g_patternEngine.DetectPattern(symbol, PATTERN_DOUBLE_BOTTOM, pattern))
       {
          score += pattern.confidence * 0.3;
+      }
+      
+      if(g_patternEngine.DetectPattern(symbol, PATTERN_DOUBLE_TOP, pattern))
+      {
+         score += pattern.confidence * 0.25;
+      }
+      
+      if(g_patternEngine.DetectPattern(symbol, PATTERN_HEAD_AND_SHOULDERS, pattern))
+      {
+         score += pattern.confidence * 0.35;
+      }
+      
+      // Harmonic Patterns Detection (when enabled)
+      if(InpHarmonicPatterns)
+      {
+         if(g_patternEngine.DetectPattern(symbol, PATTERN_GARTLEY, pattern))
+         {
+            score += pattern.confidence * 0.4;
+         }
+         
+         if(g_patternEngine.DetectPattern(symbol, PATTERN_BUTTERFLY, pattern))
+         {
+            score += pattern.confidence * 0.4;
+         }
       }
    }
    
