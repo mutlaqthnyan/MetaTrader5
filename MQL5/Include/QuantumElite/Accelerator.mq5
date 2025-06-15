@@ -19,6 +19,7 @@
 #include <Arrays\ArrayObj.mqh>
 #include <Indicators\Indicators.mqh>
 #include <ChartObjects\ChartObjectsTxtControls.mqh>
+#include <QuantumElite/Professional_Trade_Execution_Engine.mqh>
 
 #define QUANTUM_VERSION "4.0.0"
 #define MAX_SYMBOLS 100
@@ -112,6 +113,10 @@ CTrade              g_trade;
 CPositionInfo       g_position;
 CSymbolInfo         g_symbolInfo;
 CAccountInfo        g_account;
+CProfessionalTradeExecution g_tradeEngine;
+CSmartOrderRouting        g_orderRouter;
+CSlippageManager          g_slippageManager;
+CExecutionErrorHandler    g_errorHandler;
 
 QuantumSignal       g_signals[];
 NeuralLayer         g_neuralLayers[];
@@ -135,6 +140,29 @@ int OnInit()
    g_trade.SetExpertMagicNumber(GetMagicNumber());
    g_trade.SetMarginMode();
    g_trade.SetDeviationInPoints(10);
+   g_trade.SetTypeFilling(ORDER_FILLING_IOC);
+   g_trade.SetTypeFillingBySymbol(Symbol(), ORDER_FILLING_IOC);
+   
+   // Initialize Professional Trade Execution Engine
+   if(!g_tradeEngine.Initialize(&g_trade, NULL, NULL))
+   {
+      Print("❌ فشل في تهيئة محرك التنفيذ المهني");
+      return INIT_FAILED;
+   }
+   
+   if(!g_orderRouter.Initialize(NULL))
+   {
+      Print("❌ فشل في تهيئة موجه الأوامر الذكي");
+      return INIT_FAILED;
+   }
+   
+   if(!g_slippageManager.Initialize(NULL))
+   {
+      Print("❌ فشل في تهيئة مدير الانزلاق الديناميكي");
+      return INIT_FAILED;
+   }
+   
+   Print("✅ تم تهيئة محرك التنفيذ المهني بنجاح");
 
    ArrayResize(g_signals, 0);
    ArrayResize(g_neuralLayers, InpNeuralNetworkLayers);
@@ -468,23 +496,50 @@ bool ExecuteSignal(QuantumSignal &signal)
    
    if(volume > 0)
    {
-      bool result = false;
+      // Create professional trade request
+      TradeRequest request;
+      request.symbol = signal.symbol;
+      request.volume = volume;
+      request.price = signal.entryPrice;
+      request.stopLoss = signal.stopLoss;
+      request.takeProfit = signal.takeProfit;
+      request.orderType = (signal.direction > 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+      request.comment = "QuantumAccelerator-" + IntegerToString(GetMagicNumber());
+      request.magic = GetMagicNumber();
       
-      if(signal.direction > 0)
+      // Set execution parameters
+      ExecutionParams params;
+      params.maxSlippage = (int)g_slippageManager.CalculateDynamicSlippage(signal.symbol);
+      params.maxRetries = 3;
+      params.maxSpread = 5.0;
+      params.useMarketExecution = true;
+      params.allowPartialFill = false;
+      
+      // Execute using professional engine
+      ExecutionResult result = g_tradeEngine.ExecuteOrder(request, params);
+      
+      if(result.success)
       {
-         result = g_trade.Buy(volume, signal.symbol, signal.entryPrice, signal.stopLoss, signal.takeProfit);
+         Print("✅ تم تنفيذ صفقة ", signal.symbol, " - التذكرة: ", result.ticket);
+         Print("   السعر المطلوب: ", DoubleToString(request.price, _Digits));
+         Print("   السعر المنفذ: ", DoubleToString(result.executedPrice, _Digits));
+         Print("   الانزلاق: ", DoubleToString(result.slippage, 1), " نقطة");
+         Print("   وقت التنفيذ: ", result.executionTime, " مللي ثانية");
+         
+         if(InpEnableTelegram)
+         {
+            SendTradeExecutionNotification(signal, result.ticket);
+         }
+         
+         signal.isExecuted = true;
       }
       else
       {
-         result = g_trade.Sell(volume, signal.symbol, signal.entryPrice, signal.stopLoss, signal.takeProfit);
+         Print("❌ فشل تنفيذ صفقة ", signal.symbol);
+         Print("   كود الخطأ: ", result.errorCode);
+         Print("   رسالة الخطأ: ", result.errorMessage);
+         Print("   عدد المحاولات: ", result.retryCount);
       }
-      
-      if(result)
-      {
-         if(InpEnableTelegram)
-         {
-            SendTradeExecutionNotification(signal, g_trade.ResultOrder());
-         }
          Print("✅ تم تنفيذ صفقة ", signal.symbol, " - التذكرة: ", g_trade.ResultOrder());
          return true;
       }
@@ -631,7 +686,7 @@ string UrlEncode(string text)
       }
    }
    
-   return result;
+   return result.success;
 }
 
 void SendTelegramMessage(string message)
