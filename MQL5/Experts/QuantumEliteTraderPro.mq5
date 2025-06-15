@@ -18,6 +18,8 @@
 #include <QuantumElite/DataPreprocessor.mqh>
 #include <QuantumElite/RiskManagement.mqh>
 #include <QuantumElite/Professional_Trade_Execution_Engine.mqh>
+#include <QuantumElite/Advanced_Position_Manager.mqh>
+#include <QuantumElite/Pattern_Recognition_Engine.mqh>
 
 #define QUANTUM_VERSION "4.0.0"
 #define MAX_SYMBOLS 100
@@ -91,6 +93,25 @@ input bool              InpVolatilityAdjustment  = true;
 input double            InpVolatilityMultiplier  = 2.0;
 input double            InpSessionFactor         = 1.0;
 input double            InpRiskRewardRatio       = 2.0;
+
+input group "⚡ إدارة المراكز المتقدمة"
+input bool              InpEnableTrailingStop    = true;
+input bool              InpEnablePartialClose    = true;
+input bool              InpEnableBreakEven       = true;
+input bool              InpEnableScaling         = false;
+input double            InpTrailingActivation    = 20.0;
+input double            InpTrailingDistance      = 10.0;
+input double            InpTrailingStepSize      = 5.0;
+input bool              InpUseATRTrailing        = true;
+input double            InpBreakEvenThreshold    = 10.0;
+input double            InpBreakEvenBuffer       = 2.0;
+input double            InpPartialClose1         = 20.0;
+input double            InpPartialClose2         = 40.0;
+input double            InpPartialClose3         = 60.0;
+input double            InpPartialClosePercent   = 25.0;
+input int               InpMaxScaleIns           = 2;
+input double            InpScaleInPercent        = 50.0;
+input double            InpMinTrendStrength      = 0.7;
 
 input group "📱 إعدادات Telegram"
 input bool              InpEnableTelegram        = true;
@@ -1228,10 +1249,15 @@ CAccountInfo              g_account;
 CMarketAnalysisEngine     g_marketEngine;
 CPatternRecognitionEngine g_patternEngine;
 CRiskManagementSystem     g_riskManager;
+<<<<<<< HEAD
 CProfessionalTradeExecution g_tradeEngine;
 CSmartOrderRouting        g_orderRouter;
 CSlippageManager          g_slippageManager;
 CExecutionErrorHandler    g_errorHandler;
+||||||| 5cadb64
+=======
+CAdvancedPositionManager  g_advancedPositionManager;
+>>>>>>> devin/1749896691-restructure-mql5
 
 SymbolData                g_symbols[];
 TradingSignal             g_signals[];
@@ -1325,6 +1351,23 @@ int OnInit()
       }
    }
 
+   // Initialize Advanced Position Manager
+   if(!g_advancedPositionManager.Initialize())
+   {
+      Print("❌ خطأ في تهيئة مدير المراكز المتقدم");
+      return INIT_FAILED;
+   }
+   else
+   {
+      // Configure Advanced Position Manager settings
+      g_advancedPositionManager.SetTrailingEnabled(InpEnableTrailingStop);
+      g_advancedPositionManager.SetPartialCloseEnabled(InpEnablePartialClose);
+      g_advancedPositionManager.SetBreakEvenEnabled(InpEnableBreakEven);
+      g_advancedPositionManager.SetScalingEnabled(InpEnableScaling);
+      
+      Print("✅ تم تهيئة مدير المراكز المتقدم بنجاح");
+   }
+
    EventSetTimer(5);
 
    if(InpEnableTelegram)
@@ -1415,6 +1458,9 @@ void OnTick()
    ProcessTradingSignals();
    ManageActiveTrades();
    
+   // Advanced Position Management
+   g_advancedPositionManager.ManageAllPositions();
+   
    if(InpShowDashboard)
    {
       UpdateDashboard();
@@ -1492,9 +1538,35 @@ void AnalyzeSymbol(SymbolData &symbolData)
    if(InpPatternRecognition)
    {
       PatternData pattern;
+      
+      // Chart Patterns Detection
       if(g_patternEngine.DetectPattern(symbol, PATTERN_DOUBLE_BOTTOM, pattern))
       {
          score += pattern.confidence * 0.3;
+      }
+      
+      if(g_patternEngine.DetectPattern(symbol, PATTERN_DOUBLE_TOP, pattern))
+      {
+         score += pattern.confidence * 0.25;
+      }
+      
+      if(g_patternEngine.DetectPattern(symbol, PATTERN_HEAD_AND_SHOULDERS, pattern))
+      {
+         score += pattern.confidence * 0.35;
+      }
+      
+      // Harmonic Patterns Detection (when enabled)
+      if(InpHarmonicPatterns)
+      {
+         if(g_patternEngine.DetectPattern(symbol, PATTERN_GARTLEY, pattern))
+         {
+            score += pattern.confidence * 0.4;
+         }
+         
+         if(g_patternEngine.DetectPattern(symbol, PATTERN_BUTTERFLY, pattern))
+         {
+            score += pattern.confidence * 0.4;
+         }
       }
    }
    
