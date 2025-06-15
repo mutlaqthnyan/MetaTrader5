@@ -17,6 +17,7 @@
 #include <QuantumElite/NeuralNetwork.mqh>
 #include <QuantumElite/DataPreprocessor.mqh>
 #include <QuantumElite/RiskManagement.mqh>
+#include <QuantumElite/Professional_Trade_Execution_Engine.mqh>
 #include <QuantumElite/Advanced_Position_Manager.mqh>
 #include <QuantumElite/Pattern_Recognition_Engine.mqh>
 
@@ -221,6 +222,10 @@ CAccountInfo              g_account;
 CMarketAnalysisEngine     g_marketEngine;
 CPatternRecognitionEngine g_patternEngine;
 CRiskManagementSystem     g_riskManager;
+CProfessionalTradeExecution g_tradeEngine;
+CSmartOrderRouting        g_orderRouter;
+CSlippageManager          g_slippageManager;
+CExecutionErrorHandler    g_errorHandler;
 
 SymbolData                g_symbols[];
 TradingSignal             g_signals[];
@@ -1244,7 +1249,15 @@ CAccountInfo              g_account;
 CMarketAnalysisEngine     g_marketEngine;
 CPatternRecognitionEngine g_patternEngine;
 CRiskManagementSystem     g_riskManager;
+<<<<<<< HEAD
+CProfessionalTradeExecution g_tradeEngine;
+CSmartOrderRouting        g_orderRouter;
+CSlippageManager          g_slippageManager;
+CExecutionErrorHandler    g_errorHandler;
+||||||| 5cadb64
+=======
 CAdvancedPositionManager  g_advancedPositionManager;
+>>>>>>> devin/1749896691-restructure-mql5
 
 SymbolData                g_symbols[];
 TradingSignal             g_signals[];
@@ -1268,6 +1281,29 @@ int OnInit()
    g_trade.SetExpertMagicNumber(GetMagicNumber());
    g_trade.SetMarginMode();
    g_trade.SetDeviationInPoints(10);
+   g_trade.SetTypeFilling(ORDER_FILLING_IOC);
+   g_trade.SetTypeFillingBySymbol(Symbol(), ORDER_FILLING_IOC);
+   
+   // Initialize Professional Trade Execution Engine
+   if(!g_tradeEngine.Initialize(&g_trade, &g_marketEngine, &g_riskManager))
+   {
+      Print("❌ فشل في تهيئة محرك التنفيذ المهني");
+      return INIT_FAILED;
+   }
+   
+   if(!g_orderRouter.Initialize(&g_marketEngine))
+   {
+      Print("❌ فشل في تهيئة موجه الأوامر الذكي");
+      return INIT_FAILED;
+   }
+   
+   if(!g_slippageManager.Initialize(&g_marketEngine))
+   {
+      Print("❌ فشل في تهيئة مدير الانزلاق الديناميكي");
+      return INIT_FAILED;
+   }
+   
+   Print("✅ تم تهيئة محرك التنفيذ المهني بنجاح");
 
    ArrayResize(g_symbols, 0);
    ArrayResize(g_signals, 0);
@@ -1605,37 +1641,55 @@ bool ExecuteTrade(TradingSignal &signal)
    double volume = g_riskManager.CalculatePositionSize(signal.symbol, signal.entryPrice, signal.stopLoss);
    if(volume <= 0) return false;
    
-   bool result = false;
+   // Create professional trade request
+   TradeRequest request;
+   request.symbol = signal.symbol;
+   request.volume = volume;
+   request.price = signal.entryPrice;
+   request.stopLoss = signal.stopLoss;
+   request.takeProfit = signal.takeProfit;
+   request.orderType = (signal.direction > 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   request.comment = "QuantumElite-" + IntegerToString(GetMagicNumber());
+   request.magic = GetMagicNumber();
    
-   if(signal.direction > 0)
-   {
-      result = g_trade.Buy(volume, signal.symbol, signal.entryPrice, signal.stopLoss, signal.takeProfit);
-   }
-   else
-   {
-      result = g_trade.Sell(volume, signal.symbol, signal.entryPrice, signal.stopLoss, signal.takeProfit);
-   }
+   // Set execution parameters
+   ExecutionParams params;
+   params.maxSlippage = (int)g_slippageManager.CalculateDynamicSlippage(signal.symbol);
+   params.maxRetries = 3;
+   params.maxSpread = 5.0;
+   params.useMarketExecution = true;
+   params.allowPartialFill = false;
    
-   if(result)
+   // Execute using professional engine
+   ExecutionResult result = g_tradeEngine.ExecuteOrder(request, params);
+   
+   if(result.success)
    {
-      AddToActiveTrades(signal, g_trade.ResultOrder());
+      AddToActiveTrades(signal, result.ticket);
       
       if(InpEnableTelegram)
       {
-         SendTradeExecutionNotification(signal, g_trade.ResultOrder());
+         SendTradeExecutionNotification(signal, result.ticket);
       }
       
       signal.isExecuted = true;
       g_totalTrades++;
       
-      Print("✅ تم تنفيذ صفقة ", signal.symbol, " - التذكرة: ", g_trade.ResultOrder());
+      Print("✅ تم تنفيذ صفقة ", signal.symbol, " - التذكرة: ", result.ticket);
+      Print("   السعر المطلوب: ", DoubleToString(request.price, _Digits));
+      Print("   السعر المنفذ: ", DoubleToString(result.executedPrice, _Digits));
+      Print("   الانزلاق: ", DoubleToString(result.slippage, 1), " نقطة");
+      Print("   وقت التنفيذ: ", result.executionTime, " مللي ثانية");
    }
    else
    {
-      Print("❌ فشل تنفيذ صفقة ", signal.symbol, " - الخطأ: ", GetLastError());
+      Print("❌ فشل تنفيذ صفقة ", signal.symbol);
+      Print("   كود الخطأ: ", result.errorCode);
+      Print("   رسالة الخطأ: ", result.errorMessage);
+      Print("   عدد المحاولات: ", result.retryCount);
    }
    
-   return result;
+   return result.success;
 }
 
 void AddToActiveTrades(TradingSignal &signal, ulong ticket)
